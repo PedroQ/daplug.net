@@ -82,7 +82,17 @@ namespace daplug.net
 
             }
             Debug.WriteLine("=> " + BitConverter.ToString(finalAPDU.ToByteArray()));
+
             var response = await dongle.ExchangeAPDU(finalAPDU);
+            if (SessionKeys != null)
+            {
+                if (SessionKeys.SecurityLevel.HasFlag(SecurityLevel.RESPONSE_DEC))
+                {
+                    if (response.HasData)
+                        response.ResponseData = DaplugCrypto.DecryptAPDUResponse(SessionKeys, response.ResponseData);
+                }
+            }
+
             Debug.WriteLine("<= " + BitConverter.ToString(response.ToByteArray()));
 
             return response;
@@ -206,7 +216,7 @@ namespace daplug.net
             if (BitConverter.IsLittleEndian)
                 Array.Reverse(offsetBytes);
 
-            var readFileCommand = new byte[] { 0x80, 0xB0, offsetBytes[0], offsetBytes[1], (SessionKeys != null) ? (byte) 0x00 : length };
+            var readFileCommand = new byte[] { 0x80, 0xB0, offsetBytes[0], offsetBytes[1], (SessionKeys != null) ? (byte)0x00 : length };
 
             var command = new APDUCommand(readFileCommand);
 

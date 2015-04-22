@@ -10,6 +10,9 @@ namespace daplug.net.Utils
 {
     internal class Crypto
     {
+
+        private static readonly byte[] defaultIV = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
         private static byte[] GPKeyTo3DESKey(byte[] GPKey)
         {
 
@@ -22,7 +25,7 @@ namespace daplug.net.Utils
             return _3DESKey;
         }
 
-        internal static byte[] TripleDESEncrypt(byte[] key, byte[] iv, byte[] data)
+        internal static byte[] TripleDESEncrypt(byte[] key, byte[] data, byte[] iv = null)
         {
             MemoryStream cryptoStreamOutput = new MemoryStream();
 
@@ -30,7 +33,7 @@ namespace daplug.net.Utils
             tdes.Padding = PaddingMode.None;
             tdes.Mode = CipherMode.CBC;
 
-            using (CryptoStream encStream = new CryptoStream(cryptoStreamOutput, tdes.CreateEncryptor(GPKeyTo3DESKey(key), iv), CryptoStreamMode.Write))
+            using (CryptoStream encStream = new CryptoStream(cryptoStreamOutput, tdes.CreateEncryptor(GPKeyTo3DESKey(key), iv ?? defaultIV), CryptoStreamMode.Write))
             {
                 encStream.Write(data, 0, data.Length);
             }
@@ -38,10 +41,22 @@ namespace daplug.net.Utils
             return cryptoStreamOutput.ToArray();
         }
 
-        internal static byte[] TripleDESEncrypt(byte[] key, byte[] data)
+        internal static byte[] TripleDESDecrypt(byte[] key, byte[] data, byte[] iv = null)
         {
-            return TripleDESEncrypt(key, new byte[8], data);
+            MemoryStream cryptoStreamOutput = new MemoryStream();
+
+            TripleDESCryptoServiceProvider tdes = new TripleDESCryptoServiceProvider();
+            tdes.Padding = PaddingMode.None;
+            tdes.Mode = CipherMode.CBC;
+
+            using (CryptoStream encStream = new CryptoStream(cryptoStreamOutput, tdes.CreateDecryptor(GPKeyTo3DESKey(key), iv ?? defaultIV), CryptoStreamMode.Write))
+            {
+                encStream.Write(data, 0, data.Length);
+            }
+
+            return cryptoStreamOutput.ToArray();
         }
+
 
         internal static byte[] TripleDESEncryptECB(byte[] key, byte[] data)
         {
@@ -61,7 +76,7 @@ namespace daplug.net.Utils
             return cryptoStreamOutput.ToArray();
         }
 
-        internal static byte[] DESEncrypt(byte[] key, byte[] iv, byte[] data)
+        internal static byte[] DESEncrypt(byte[] key, byte[] data, byte[] iv = null)
         {
             MemoryStream cryptoStreamOutput = new MemoryStream();
 
@@ -69,17 +84,12 @@ namespace daplug.net.Utils
             tdes.Mode = CipherMode.CBC;
             tdes.Padding = PaddingMode.None;
             tdes.Key = key;
-            using (CryptoStream encStream = new CryptoStream(cryptoStreamOutput, tdes.CreateEncryptor(key, iv), CryptoStreamMode.Write))
+            using (CryptoStream encStream = new CryptoStream(cryptoStreamOutput, tdes.CreateEncryptor(key, iv ?? defaultIV), CryptoStreamMode.Write))
             {
                 encStream.Write(data, 0, data.Length);
             }
 
             return cryptoStreamOutput.ToArray();
-        }
-
-        internal static byte[] DESEncrypt(byte[] key, byte[] data)
-        {
-            return DESEncrypt(key, new byte[8], data);
         }
     }
 }

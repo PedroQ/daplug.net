@@ -91,6 +91,12 @@ namespace daplug.net
 
             return encryptedData;
         }
+        internal static byte[] DecryptAPDUResponse(DaplugSessionKeys keyset, byte[] responseBytes)
+        {
+            byte[] decryptedResponse = Crypto.TripleDESDecrypt(keyset.REncKey, responseBytes);
+
+            return RemovePadding(decryptedResponse);
+        }
 
         private static byte[] AddPadding(byte[] data)
         {
@@ -98,5 +104,22 @@ namespace daplug.net
             padding[0] = 0x80;
             return data.Concat(padding).ToArray();
         }
+
+        private static byte[] RemovePadding(byte[] data)
+        {
+            byte[] unpaddedData;
+            for (int i = data.Length - 1; i >= 0; i--)
+            {
+                if (data[i] == 0x80)
+                {
+                    unpaddedData = new byte[i];
+                    Array.Copy(data, 0, unpaddedData, 0, i);
+                    return unpaddedData;
+                }
+            }
+            return data;
+
+        }
+
     }
 }

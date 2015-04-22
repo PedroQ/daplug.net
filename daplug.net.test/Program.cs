@@ -40,7 +40,7 @@ namespace daplug.net.test
         {
             WriteTitle();
             var keyset = new DaplugKeySet(0x01, "404142434445464748494A4B4C4D4E4F");
-            var securityLevel = DaplugAPI.SecurityLevel.COMMAND_MAC | DaplugAPI.SecurityLevel.COMMAND_ENC; // | DaplugAPI.SecurityLevel.RESPONSE_ENC | DaplugAPI.SecurityLevel.RESPONSE_MAC;
+            var securityLevel = DaplugAPI.SecurityLevel.COMMAND_MAC | DaplugAPI.SecurityLevel.COMMAND_ENC | DaplugAPI.SecurityLevel.RESPONSE_DEC;
             var res = await api.OpenSecureChannel(keyset, securityLevel);
             Console.WriteLine("Result: {0}", res);
         }

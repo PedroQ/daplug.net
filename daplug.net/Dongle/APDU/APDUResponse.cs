@@ -9,7 +9,7 @@ namespace daplug.net.Dongle.APDU
 {
     public class APDUResponse
     {
-        public byte[] ResponseData { get; private set; }
+        public byte[] ResponseData { get; set; }
         public byte SW1 { get; private set; }
         public byte SW2 { get; private set; }
         public bool IsSuccessfulResponse
@@ -17,6 +17,14 @@ namespace daplug.net.Dongle.APDU
             get
             {
                 return SW1 == 0x90 && SW2 == 0x00;
+            }
+        }
+
+        public bool HasData
+        {
+            get
+            {
+                return ResponseData != null && ResponseData.Length > 0;
             }
         }
 
