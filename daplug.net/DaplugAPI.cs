@@ -56,40 +56,75 @@ namespace daplug.net
 
         public async Task<APDUResponse> ExchangeAPDU(APDUCommand apdu)
         {
-            byte[] apduMac = new byte[0];
+            var finalAPDU = new APDUCommand(apdu.ToByteArray());
 
-            var finalAPDU = apdu;
             if (SessionKeys != null)
             {
-                apdu.InstructionClass |= 0x04;
+                byte[] apduMac = null;
 
                 if (SessionKeys.SecurityLevel.HasFlag(SecurityLevel.COMMAND_MAC))
                 {
-                    apduMac = DaplugCrypto.CalculateApduMac(SessionKeys, apdu);
+                    finalAPDU.InstructionClass |= 0x04;
+                    var apduBytes = finalAPDU.ToByteArray();
+                    apduBytes[4] += 0x08;
+                    apduMac = DaplugCrypto.CalculateApduMac(SessionKeys.CMacKey, apduBytes, SessionKeys.CMac);
                     Array.Copy(apduMac, 0, SessionKeys.CMac, 0, 8);
                 }
-                if ((apdu.InstructionClass == 0x84 && apdu.InstructionCode == 0x82) == false) // Do not encrypt EXTERNAL_AUTHENTICATE APDU
+                if ((apdu.InstructionClass == 0x80 && apdu.InstructionCode == 0x82) == false) // Do not encrypt EXTERNAL_AUTHENTICATE APDU
                 {
                     if (SessionKeys.SecurityLevel.HasFlag(SecurityLevel.COMMAND_ENC))
                     {
                         finalAPDU.CommandData = DaplugCrypto.EncryptAPDUData(SessionKeys, apdu);
                     }
                 }
-                if (apduMac.Length == 8)
+                if (apduMac.Length != null)
                 {
                     finalAPDU.CommandData = finalAPDU.CommandData.Concat(apduMac).ToArray();
                 }
 
             }
+
             Debug.WriteLine("=> " + BitConverter.ToString(finalAPDU.ToByteArray()));
 
             var response = await dongle.ExchangeAPDU(finalAPDU);
-            if (SessionKeys != null)
+
+
+            if (SessionKeys != null && response.HasData)
             {
+                byte[] responseMac = null;
+                if (SessionKeys.SecurityLevel.HasFlag(SecurityLevel.RESPONSE_MAC))
+                {
+                    // extract MAC from the response (the last 8 bytes)
+                    responseMac = new byte[8];
+                    Array.Copy(response.ResponseData, response.ResponseData.Length - 8, responseMac, 0, 8);
+
+                    //resize the response data to exclude the last 8 bytes (MAC)
+                    var tmpData = response.ResponseData;
+                    Array.Resize(ref tmpData, response.ResponseData.Length - 8);
+                    response.ResponseData = tmpData;
+                }
+
                 if (SessionKeys.SecurityLevel.HasFlag(SecurityLevel.RESPONSE_DEC))
                 {
-                    if (response.HasData)
                         response.ResponseData = DaplugCrypto.DecryptAPDUResponse(SessionKeys, response.ResponseData);
+                }
+
+                if (SessionKeys.SecurityLevel.HasFlag(SecurityLevel.RESPONSE_MAC))
+                {
+                    //construct MAC input
+                    var apduCommandBytes = apdu.ToByteArray();
+                    //command bytes + data lenght + data + sw1 & sw2
+                    //var macInput = new byte[apduCommandBytes.Length + 1 + response.ResponseData.Length + 2];
+                    byte[] macInput = apduCommandBytes.Concat(new byte[] {(byte)response.ResponseData.Length} )
+                        .Concat(response.ResponseData).Concat(new byte[] { response.SW1, response.SW2}).ToArray();
+
+                    byte[] calculatedResponseMac = DaplugCrypto.CalculateApduMac(SessionKeys.RMacKey, macInput, SessionKeys.RMac, true);
+
+                    if (calculatedResponseMac.SequenceEqual(responseMac) == false)
+                        Console.WriteLine("MAC CHECK FAILED!!");
+
+                    Array.Copy(calculatedResponseMac, SessionKeys.RMac, 8);
+
                 }
             }
 
@@ -145,7 +180,7 @@ namespace daplug.net
             var response = await ExchangeAPDU(authCommand);
 
             if (response.IsSuccessfulResponse == false)
-                throw new DaplugAPIException("Authentication error.");
+                return false;
 
             byte[] counter = new byte[2];
             byte[] cardChallenge = new byte[8];
@@ -175,7 +210,14 @@ namespace daplug.net
 
             var extAuthResponse = await ExchangeAPDU(extAuthCommand);
 
-            return extAuthResponse.IsSuccessfulResponse;
+            if (extAuthResponse.IsSuccessfulResponse)
+            {
+                Array.Copy(SessionKeys.CMac, SessionKeys.RMac, 8);
+                return true;
+            }
+
+            SessionKeys = null;
+            return false;
         }
 
         public void CloseSecureChannel()

@@ -53,31 +53,36 @@ namespace daplug.net
             return cryptogram;
         }
 
-        public static byte[] CalculateApduMac(DaplugSessionKeys sessionKeyset, APDUCommand apdu)
+        public static byte[] CalculateApduMac(byte[] key, byte[] apduBytes, byte[] iv, bool rMac = false)
         {
-            byte[] apduBytes = apdu.ToByteArray();
-
-            apduBytes[4] += 0x08;
-
-            byte[] workData = AddPadding(apduBytes);
-
-            if (sessionKeyset.CMac.All(b => b == 0x00) == false)
+            if (!rMac)
             {
-                workData = sessionKeyset.CMac.Concat(workData).ToArray();
+                if (iv.All(b => b == 0x00) == false)
+                {
+                    apduBytes = iv.Concat(apduBytes).ToArray();
+                }
             }
 
-            byte[] firstBlocks = new byte[workData.Length - 8];
+            apduBytes = AddPadding(apduBytes);
+
+            byte[] firstBlocks = new byte[apduBytes.Length - 8];
             byte[] lastBlock = new byte[8];
-            Array.Copy(workData, 0, firstBlocks, 0, workData.Length - 8);
-            Array.Copy(workData, workData.Length - 8, lastBlock, 0, 8);
+            Array.Copy(apduBytes, 0, firstBlocks, 0, apduBytes.Length - 8);
+            Array.Copy(apduBytes, apduBytes.Length - 8, lastBlock, 0, 8);
 
             byte[] DESCMacKey = new byte[8];
-            Array.Copy(sessionKeyset.CMacKey, 0, DESCMacKey, 0, 8);
+            Array.Copy(key, 0, DESCMacKey, 0, 8);
 
+            byte[] desIV = rMac ? iv : null;
 
-            byte[] buffer = Crypto.DESEncrypt(DESCMacKey, firstBlocks);
+            byte[] buffer = Crypto.DESEncrypt(DESCMacKey, firstBlocks, desIV);
 
-            buffer = Crypto.TripleDESEncrypt(sessionKeyset.CMacKey, buffer, lastBlock);
+            byte[] triplesDESInput = new byte[8];
+            for (int i = 0; i < 8; i++)
+            {
+                triplesDESInput[i] = (byte)(apduBytes[apduBytes.Length - 8 + i] ^ buffer[buffer.Length - 8 + i]);
+            }
+            buffer = Crypto.TripleDESEncryptECB(key, triplesDESInput);
 
             return buffer;
 
