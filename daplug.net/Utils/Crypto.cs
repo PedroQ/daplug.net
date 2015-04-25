@@ -91,5 +91,28 @@ namespace daplug.net.Utils
 
             return cryptoStreamOutput.ToArray();
         }
+
+        internal static byte[] CalculateKCV(byte[] key)
+        {
+            MemoryStream cryptoStreamOutput = new MemoryStream();
+
+            TripleDESCryptoServiceProvider tdes = new TripleDESCryptoServiceProvider();
+            tdes.Key = GPKeyTo3DESKey(key);
+            tdes.IV = new byte[8];
+            tdes.Padding = PaddingMode.None;
+            tdes.Mode = CipherMode.ECB;
+
+            using (CryptoStream encStream = new CryptoStream(cryptoStreamOutput, tdes.CreateEncryptor(), CryptoStreamMode.Write))
+            {
+                encStream.Write(defaultIV, 0, defaultIV.Length); //defaultIV is an 8 byte array
+            }
+
+            byte[] kcvBuffer = cryptoStreamOutput.ToArray();
+
+            //get the first 3 bytes of the 3DES result
+            byte[] finalKCV = new byte[3];
+            Array.Copy(kcvBuffer, finalKCV, 3);
+            return finalKCV;
+        }
     }
 }

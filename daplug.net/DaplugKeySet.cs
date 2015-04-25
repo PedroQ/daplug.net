@@ -10,7 +10,7 @@ namespace daplug.net
     public class DaplugKeySet
     {
 
-        enum KeyUsage
+        public enum KeyUsage
         {
             // from https://github.com/Plug-up/daplug-java/blob/master/src/io/daplug/keyset/DaplugKeyset.java
             USAGE_GP = 0x01, /** GlobalPlatform key. */
@@ -37,14 +37,34 @@ namespace daplug.net
         }
 
         public byte Version { get; set; }
-        public byte Usage { get; set; }
+        public KeyUsage Usage { get; set; }
         public ushort Access { get; set; }
         public byte[] EncKey { get; set; }
         public byte[] MacKey { get; set; }
         public byte[] DeKey { get; set; }
 
 
-        public DaplugKeySet(byte version, byte usage, ushort access, byte[] encKey, byte[] macKey, byte[] dekKey)
+        public DaplugKeySet(byte version, KeyUsage usage, ushort access, string encKey, string macKey, string dekKey)
+        {
+            this.Version = version;
+            this.Usage = usage;
+            this.Access = access;
+            this.EncKey = Helpers.StringToByteArray(encKey);
+            this.MacKey = Helpers.StringToByteArray(macKey);
+            this.DeKey = Helpers.StringToByteArray(dekKey);
+        }
+
+        public DaplugKeySet(byte version, KeyUsage usage, ushort access, string key)
+        {
+            this.Version = version;
+            this.Usage = usage;
+            this.Access = access;
+            this.EncKey = Helpers.StringToByteArray(key);
+            this.MacKey = Helpers.StringToByteArray(key);
+            this.DeKey = Helpers.StringToByteArray(key);
+        }
+
+        public DaplugKeySet(byte version, KeyUsage usage, ushort access, byte[] encKey, byte[] macKey, byte[] dekKey)
         {
             this.Version = version;
             this.Usage = usage;

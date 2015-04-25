@@ -10,29 +10,37 @@ using System.Threading.Tasks;
 
 namespace daplug.net
 {
+
+    [Flags]
+    public enum DaplugLicensing
+    {
+        FILE = 0x01,
+        KEYBOARD = 0x02,
+        URL = 0x04,
+        CRYPTO = 0x08,
+        SAMCOMMUNITY = 0x10,
+        SAM = 0x20
+    }
+
+    [Flags]
+    public enum DaplugSecurityLevel
+    {
+        COMMAND_MAC = 0x01,
+        COMMAND_ENC = 0x02,
+        RESPONSE_MAC = 0x10,
+        RESPONSE_DEC = 0x20
+    }
+
+    public enum DaplugStatus
+    {
+        Selectable = 0x07,
+        Personalized = 0x0F,
+        Terminated = 0x7f,
+        Locked = 0x83
+    }
+
     public class DaplugAPI : IDisposable
     {
-
-        [Flags]
-        public enum SecurityLevel
-        {
-            COMMAND_MAC = 0x01,
-            COMMAND_ENC = 0x02,
-            RESPONSE_MAC = 0x10,
-            RESPONSE_DEC = 0x20
-        }
-
-        [Flags]
-        public enum Licensing
-        {
-            FILE = 0x01,
-            KEYBOARD = 0x02,
-            URL = 0x04,
-            CRYPTO = 0x08,
-            SAMCOMMUNITY = 0x10,
-            SAM = 0x20
-        }
-
 
         private readonly IDaplugDongle dongle;
 
@@ -54,7 +62,7 @@ namespace daplug.net
 
         }
 
-        public async Task<APDUResponse> ExchangeAPDU(APDUCommand apdu)
+        public async Task<APDUResponse> ExchangeAPDUAsync(APDUCommand apdu)
         {
             var finalAPDU = new APDUCommand(apdu.ToByteArray());
 
@@ -62,7 +70,7 @@ namespace daplug.net
             {
                 byte[] apduMac = null;
 
-                if (SessionKeys.SecurityLevel.HasFlag(SecurityLevel.COMMAND_MAC))
+                if (SessionKeys.SecurityLevel.HasFlag(DaplugSecurityLevel.COMMAND_MAC))
                 {
                     finalAPDU.InstructionClass |= 0x04;
                     var apduBytes = finalAPDU.ToByteArray();
@@ -72,12 +80,12 @@ namespace daplug.net
                 }
                 if ((apdu.InstructionClass == 0x80 && apdu.InstructionCode == 0x82) == false) // Do not encrypt EXTERNAL_AUTHENTICATE APDU
                 {
-                    if (SessionKeys.SecurityLevel.HasFlag(SecurityLevel.COMMAND_ENC))
+                    if (SessionKeys.SecurityLevel.HasFlag(DaplugSecurityLevel.COMMAND_ENC))
                     {
                         finalAPDU.CommandData = DaplugCrypto.EncryptAPDUData(SessionKeys, apdu);
                     }
                 }
-                if (apduMac.Length != null)
+                if (apduMac != null)
                 {
                     finalAPDU.CommandData = finalAPDU.CommandData.Concat(apduMac).ToArray();
                 }
@@ -92,7 +100,7 @@ namespace daplug.net
             if (SessionKeys != null && response.HasData)
             {
                 byte[] responseMac = null;
-                if (SessionKeys.SecurityLevel.HasFlag(SecurityLevel.RESPONSE_MAC))
+                if (SessionKeys.SecurityLevel.HasFlag(DaplugSecurityLevel.RESPONSE_MAC))
                 {
                     // extract MAC from the response (the last 8 bytes)
                     responseMac = new byte[8];
@@ -104,24 +112,24 @@ namespace daplug.net
                     response.ResponseData = tmpData;
                 }
 
-                if (SessionKeys.SecurityLevel.HasFlag(SecurityLevel.RESPONSE_DEC))
+                if (SessionKeys.SecurityLevel.HasFlag(DaplugSecurityLevel.RESPONSE_DEC))
                 {
-                        response.ResponseData = DaplugCrypto.DecryptAPDUResponse(SessionKeys, response.ResponseData);
+                    response.ResponseData = DaplugCrypto.DecryptAPDUResponse(SessionKeys, response.ResponseData);
                 }
 
-                if (SessionKeys.SecurityLevel.HasFlag(SecurityLevel.RESPONSE_MAC))
+                if (SessionKeys.SecurityLevel.HasFlag(DaplugSecurityLevel.RESPONSE_MAC))
                 {
                     //construct MAC input
                     var apduCommandBytes = apdu.ToByteArray();
                     //command bytes + data lenght + data + sw1 & sw2
                     //var macInput = new byte[apduCommandBytes.Length + 1 + response.ResponseData.Length + 2];
-                    byte[] macInput = apduCommandBytes.Concat(new byte[] {(byte)response.ResponseData.Length} )
-                        .Concat(response.ResponseData).Concat(new byte[] { response.SW1, response.SW2}).ToArray();
+                    byte[] macInput = apduCommandBytes.Concat(new byte[] { (byte)response.ResponseData.Length })
+                        .Concat(response.ResponseData).Concat(new byte[] { response.SW1, response.SW2 }).ToArray();
 
                     byte[] calculatedResponseMac = DaplugCrypto.CalculateApduMac(SessionKeys.RMacKey, macInput, SessionKeys.RMac, true);
 
                     if (calculatedResponseMac.SequenceEqual(responseMac) == false)
-                        Console.WriteLine("MAC CHECK FAILED!!");
+                        throw new DaplugAPIException("Secure Channel error: Invalid RMAC.");
 
                     Array.Copy(calculatedResponseMac, SessionKeys.RMac, 8);
 
@@ -133,36 +141,7 @@ namespace daplug.net
             return response;
         }
 
-
-        public async Task<byte[]> GetSerial()
-        {
-            var getSerialCommand = new byte[] { 0x80, 0xE6, 0x00, 0x00, 0x00 };
-
-            var command = new APDUCommand(getSerialCommand);
-
-            var response = await ExchangeAPDU(command);
-
-            if (!response.IsSuccessfulResponse)
-                throw new DaplugAPIException("Error: " + response.SW1 + response.SW2);
-
-            return response.ResponseData;
-        }
-
-        public async Task<Status> GetStatus()
-        {
-            var getStatusCommand = new byte[] { 0x80, 0xF2, 0x40, 0x00, 0x00 };
-
-            var command = new APDUCommand(getStatusCommand);
-
-            var response = await ExchangeAPDU(command);
-
-            if (!response.IsSuccessfulResponse)
-                throw new DaplugAPIException("Error: " + response.SW1 + response.SW2);
-
-            return (Status)response.ResponseData[9];
-        }
-
-        public async Task<bool> OpenSecureChannel(DaplugKeySet keyset, SecurityLevel securityLevel, byte[] diversifier = null, byte[] hostChallenge = null)
+        public async Task OpenSecureChannelAsync(DaplugKeySet keyset, DaplugSecurityLevel securityLevel, byte[] diversifier = null, byte[] hostChallenge = null)
         {
             if (keyset.EncKey == null || keyset.MacKey == null || keyset.DeKey == null)
                 throw new DaplugAPIException("Invalid keyset.");
@@ -177,10 +156,10 @@ namespace daplug.net
             var authCommandHeader = new byte[] { 0x80, 0x50, keyset.Version, 0x00, 0x00 };
             var authCommand = new APDUCommand(authCommandHeader, hostChallenge);
 
-            var response = await ExchangeAPDU(authCommand);
+            var response = await ExchangeAPDUAsync(authCommand);
 
             if (response.IsSuccessfulResponse == false)
-                return false;
+                throw new DaplugAPIException("INITIALIZE UPDATE failed.", response.SW1, response.SW2);
 
             byte[] counter = new byte[2];
             byte[] cardChallenge = new byte[8];
@@ -194,12 +173,12 @@ namespace daplug.net
             var computedCardCryptogram = DaplugCrypto.CalculateCryptogram(tempSessionKeys, hostChallenge, cardChallenge);
 
             if (computedCardCryptogram.SequenceEqual(cardCryptogram) == false)
-                return false;
+                throw new DaplugAPIException("Invalid card cryptogram.");
 
             var hostCryptogram = DaplugCrypto.CalculateCryptogram(tempSessionKeys, cardChallenge, hostChallenge);
 
-            if (securityLevel.HasFlag(SecurityLevel.COMMAND_MAC) == false)
-                securityLevel |= SecurityLevel.COMMAND_MAC;
+            if (securityLevel.HasFlag(DaplugSecurityLevel.COMMAND_MAC) == false)
+                securityLevel |= DaplugSecurityLevel.COMMAND_MAC;
 
             tempSessionKeys.SecurityLevel = securityLevel;
 
@@ -208,16 +187,15 @@ namespace daplug.net
             var extAuthCommandHeader = new byte[] { 0x80, 0x82, (byte)SessionKeys.SecurityLevel, 0x00, 0x00 };
             var extAuthCommand = new APDUCommand(extAuthCommandHeader, hostCryptogram);
 
-            var extAuthResponse = await ExchangeAPDU(extAuthCommand);
+            var extAuthResponse = await ExchangeAPDUAsync(extAuthCommand);
 
-            if (extAuthResponse.IsSuccessfulResponse)
+            if (extAuthResponse.IsSuccessfulResponse == false)
             {
-                Array.Copy(SessionKeys.CMac, SessionKeys.RMac, 8);
-                return true;
+                SessionKeys = null;
+                throw new DaplugAPIException("EXTERNAL AUTHENTICATE failed.", response.SW1, response.SW2);
             }
 
-            SessionKeys = null;
-            return false;
+            Array.Copy(SessionKeys.CMac, SessionKeys.RMac, 8);
         }
 
         public void CloseSecureChannel()
@@ -228,20 +206,44 @@ namespace daplug.net
             }
         }
 
-        public async Task<byte[]> SelectFile(ushort fileID)
+        public async Task<byte[]> GetSerialAsync()
+        {
+            var getSerialCommand = new byte[] { 0x80, 0xE6, 0x00, 0x00, 0x00 };
+
+            var command = new APDUCommand(getSerialCommand);
+
+            var response = await ExchangeAPDUAsync(command);
+
+            if (!response.IsSuccessfulResponse)
+                throw new DaplugAPIException("Error: " + response.SW1 + response.SW2);
+
+            return response.ResponseData;
+        }
+
+        public async Task<DaplugStatus> GetStatusAsync()
+        {
+            var getStatusCommand = new byte[] { 0x80, 0xF2, 0x40, 0x00, 0x00 };
+
+            var command = new APDUCommand(getStatusCommand);
+
+            var response = await ExchangeAPDUAsync(command);
+
+            if (!response.IsSuccessfulResponse)
+                throw new DaplugAPIException("Error: " + response.SW1 + response.SW2);
+
+            return (DaplugStatus)response.ResponseData[9];
+        }
+
+        public async Task<byte[]> SelectFileAsync(ushort fileID)
         {
 
-            var fileIDBytes = BitConverter.GetBytes(fileID);
-            // If this is little endian machine, reverse the array
-            // so that the bytes are in the correct order
-            if (BitConverter.IsLittleEndian)
-                Array.Reverse(fileIDBytes);
+            var fileIDBytes = Helpers.UShortToByteArray(fileID);
 
             var selectFileCommand = new byte[] { 0x80, 0xA4, 0x00, 0x00, 0x00 };
 
             var command = new APDUCommand(selectFileCommand, fileIDBytes);
 
-            var response = await ExchangeAPDU(command);
+            var response = await ExchangeAPDUAsync(command);
 
             if (!response.IsSuccessfulResponse)
                 throw new DaplugAPIException("Error: " + response.SW1 + response.SW2);
@@ -249,20 +251,38 @@ namespace daplug.net
             return response.ResponseData;
         }
 
-        public async Task<byte[]> ReadFile(ushort offset, byte length)
+        public async Task SelectPathAsync(params ushort[] path)
+        {
+            foreach (ushort p in path)
+            {
+                await SelectFileAsync(p);
+            }
+        }
+
+        public async Task DeleteFileOrDirAsync(ushort fileID)
+        {
+            var fileIDBytes = Helpers.UShortToByteArray(fileID);
+
+            var deleteFileCommandBytes = new byte[] { 0x80, 0xE4, 0x00, 0x00, 0x02 };
+
+            var command = new APDUCommand(deleteFileCommandBytes, fileIDBytes);
+
+            var response = await ExchangeAPDUAsync(command);
+
+            if (!response.IsSuccessfulResponse)
+                throw new DaplugAPIException("Error: " + response.SW1 + response.SW2);
+        }
+
+        public async Task<byte[]> ReadFileAsync(ushort offset, byte length)
         {
 
-            var offsetBytes = BitConverter.GetBytes(offset);
-            // If this is little endian machine, reverse the array
-            // so that the bytes are in the correct order
-            if (BitConverter.IsLittleEndian)
-                Array.Reverse(offsetBytes);
+            var offsetBytes = Helpers.UShortToByteArray(offset);
 
             var readFileCommand = new byte[] { 0x80, 0xB0, offsetBytes[0], offsetBytes[1], (SessionKeys != null) ? (byte)0x00 : length };
 
             var command = new APDUCommand(readFileCommand);
 
-            var response = await ExchangeAPDU(command);
+            var response = await ExchangeAPDUAsync(command);
 
             if (!response.IsSuccessfulResponse)
                 throw new DaplugAPIException("Error: " + response.SW1 + response.SW2);
@@ -270,58 +290,118 @@ namespace daplug.net
             return response.ResponseData;
         }
 
-        public async Task<bool> UsbToHid()
+
+
+        private List<byte> PrepareKeyToPutKeyCommand(byte[] key, byte keyUsage, ushort keyAccess)
+        {
+
+            var result = new List<byte> { 0xff, 0x80, 0x10 }; // key type (FF80) + Key Length (0x10)
+            //encrypt the key
+            var encryptedKey = Crypto.TripleDESEncryptECB(SessionKeys.SKEKey, key);
+            result.AddRange(encryptedKey);
+
+            //Key Check Value
+            result.Add(0x03); //KCV Lenght
+            var keyCheckValue = Crypto.CalculateKCV(key);
+            result.AddRange(keyCheckValue);
+
+            //key usage
+            result.Add(0x01); //key usage lenght
+            result.Add(keyUsage);
+
+            //key access
+            result.Add(0x02); //key access lenght
+            result.AddRange(Helpers.UShortToByteArray(keyAccess));
+
+            return result;
+
+        }
+
+        public async Task PutKeyAsync(DaplugKeySet key, byte mode = 0x81)
+        {
+
+            var putKeyCommandAPDUBytes = new List<byte> { 0x80, 0xD8, key.Version, mode, 0x00 }; //header
+
+            // Key version
+            putKeyCommandAPDUBytes.Add(key.Version);
+
+
+            //Add the keys to the command data
+            var encKeyData = PrepareKeyToPutKeyCommand(key.EncKey, (byte)key.Usage, key.Access);
+            putKeyCommandAPDUBytes.AddRange(encKeyData);
+
+            var macKeyData = PrepareKeyToPutKeyCommand(key.MacKey, (byte)key.Usage, key.Access);
+            putKeyCommandAPDUBytes.AddRange(macKeyData);
+
+            var keKeyData = PrepareKeyToPutKeyCommand(key.DeKey, (byte)key.Usage, key.Access);
+            putKeyCommandAPDUBytes.AddRange(keKeyData);
+
+            var putKeyCommand = new APDUCommand(putKeyCommandAPDUBytes.ToArray());
+
+            var response = await ExchangeAPDUAsync(putKeyCommand);
+
+            if (!response.IsSuccessfulResponse)
+                throw new DaplugAPIException("Error: " + response.SW1 + response.SW2);
+        }
+
+        public async Task DeleteKeyAsync(byte keyVersion)
+        {
+            //navigate to the keys dir
+            await SelectPathAsync(DaplugConstants.MasterFileId, DaplugConstants.InternalConfigDirId, DaplugConstants.SecretCodesDirId, 0x0001);
+
+            ushort keyFileID = (ushort)(0x1000 + keyVersion);
+            await DeleteFileOrDirAsync(keyFileID);
+        }
+
+        public async Task<bool> UsbToHidAsync()
         {
             var usbToHidCommand = new byte[] { 0xD0, 0x52, 0x08, 0x01, 0x00 };
 
             var command = new APDUCommand(usbToHidCommand);
 
-            var response = await ExchangeAPDU(command);
+            var response = await ExchangeAPDUAsync(command);
 
             return response.IsSuccessfulResponse;
         }
 
-        public async Task<bool> HidToUsb()
+        public async Task<bool> HidToUsbAsync()
         {
             var HidToUsbCommand = new byte[] { 0xD0, 0x52, 0x08, 0x02, 0x00 };
 
             var command = new APDUCommand(HidToUsbCommand);
 
-            var response = await ExchangeAPDU(command);
+            var response = await ExchangeAPDUAsync(command);
 
             return response.IsSuccessfulResponse;
         }
 
-        public async Task<bool> Reset()
+        public async Task<bool> ResetAsync()
         {
             var resetCommand = new byte[] { 0xD0, 0x52, 0x01, 0x00, 0x00 };
 
             var command = new APDUCommand(resetCommand);
 
-            var response = await ExchangeAPDU(command);
+            var response = await ExchangeAPDUAsync(command);
 
             return response.IsSuccessfulResponse;
         }
 
-        public async Task<bool> Halt()
+        public async Task<bool> HaltAsync()
         {
             var haltCommand = new byte[] { 0xD0, 0x52, 0x02, 0x00, 0x00 };
 
             var command = new APDUCommand(haltCommand);
 
-            var response = await ExchangeAPDU(command);
+            var response = await ExchangeAPDUAsync(command);
 
             return response.IsSuccessfulResponse;
         }
 
-        public async Task<Licensing> GetLicensedOptions()
+        public async Task<DaplugLicensing> GetLicensedOptionsAsync()
         {
-            await SelectFile(0x3F00);
-            await SelectFile(0xC00F);
-            await SelectFile(0xD00D);
-            await SelectFile(0xA1BA);
-            var licFileContents = await ReadFile(0, 2);
-            return (Licensing)licFileContents[0];
+            await SelectPathAsync(DaplugConstants.MasterFileId, DaplugConstants.InternalConfigDirId, DaplugConstants.ApplicationStatesDirId, DaplugConstants.LicensingFileId);
+            var licFileContents = await ReadFileAsync(0, 2);
+            return (DaplugLicensing)licFileContents[0];
         }
 
         public void Dispose()
@@ -336,16 +416,6 @@ namespace daplug.net
             {
                 dongle.Dispose();
             }
-        }
-
-
-
-        public enum Status
-        {
-            Selectable = 0x07,
-            Personalized = 0x0F,
-            Terminated = 0x7f,
-            Locked = 83
         }
     }
 }

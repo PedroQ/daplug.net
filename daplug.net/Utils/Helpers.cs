@@ -16,5 +16,16 @@ namespace daplug.net.Utils
                 bytes[i / 2] = Convert.ToByte(hex.Substring(i, 2), 16);
             return bytes;
         }
+
+        internal static byte[] UShortToByteArray(ushort input)
+        {
+            var result = BitConverter.GetBytes(input);
+            // If this is little endian machine, reverse the array
+            // so that the bytes are in the correct order
+            if (BitConverter.IsLittleEndian)
+                Array.Reverse(result);
+
+            return result;
+        }
     }
 }

@@ -14,7 +14,7 @@ namespace daplug.net
         public byte[] RMacKey { get; set; }
         public byte[] SKEKey { get; set; }
 
-        public DaplugAPI.SecurityLevel SecurityLevel { get; set; }
+        public DaplugSecurityLevel SecurityLevel { get; set; }
 
         public byte[] CMac { get; set; }
         public byte[] RMac { get; set; }
