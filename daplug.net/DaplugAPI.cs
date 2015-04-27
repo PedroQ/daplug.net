@@ -12,7 +12,7 @@ namespace daplug.net
 {
 
     [Flags]
-    public enum DaplugLicensing
+    public enum DaplugLicensing : byte
     {
         FILE = 0x01,
         KEYBOARD = 0x02,
@@ -23,7 +23,7 @@ namespace daplug.net
     }
 
     [Flags]
-    public enum DaplugSecurityLevel
+    public enum DaplugSecurityLevel : byte
     {
         COMMAND_MAC = 0x01,
         COMMAND_ENC = 0x02,
@@ -31,18 +31,23 @@ namespace daplug.net
         RESPONSE_DEC = 0x20
     }
 
-    public enum DaplugStatus
+    public enum DaplugStatus : byte
     {
         Selectable = 0x07,
-        Personalized = 0x0F,
+        Personalized = 0x0f,
         Terminated = 0x7f,
         Locked = 0x83
     }
 
     public class DaplugAPI : IDisposable
     {
+        public static readonly ushort MAX_FS_FILE_SIZE = 0xffff; //Max size of an EF
+        public static readonly byte MAX_IO_DATA_SIZE = 0xef; //EF = FF - 8 - 8 (data max len - possible mac - possible pad if data encrypted)
+
+
 
         private readonly IDaplugDongle dongle;
+        public DaplugLicensing LicensedOptions { get; private set; }
 
         public DaplugSessionKeys SessionKeys { get; private set; }
 
@@ -60,6 +65,15 @@ namespace daplug.net
 
             return null;
 
+        }
+
+        private async Task CheckLicencedOptionAsync(DaplugLicensing option)
+        {
+            if (LicensedOptions == 0x00)
+                LicensedOptions = await GetLicensedOptionsAsync();
+
+            if (LicensedOptions.HasFlag(option) == false)
+                throw new DaplugAPIException("This token does not have a " + option + " license.");
         }
 
         public async Task<APDUResponse> ExchangeAPDUAsync(APDUCommand apdu)
@@ -121,7 +135,7 @@ namespace daplug.net
                 {
                     //construct MAC input
                     var apduCommandBytes = apdu.ToByteArray();
-                    //command bytes + data lenght + data + sw1 & sw2
+                    //command bytes + data length + data + sw1 & sw2
                     //var macInput = new byte[apduCommandBytes.Length + 1 + response.ResponseData.Length + 2];
                     byte[] macInput = apduCommandBytes.Concat(new byte[] { (byte)response.ResponseData.Length })
                         .Concat(response.ResponseData).Concat(new byte[] { response.SW1, response.SW2 }).ToArray();
@@ -246,18 +260,23 @@ namespace daplug.net
             var response = await ExchangeAPDUAsync(command);
 
             if (!response.IsSuccessfulResponse)
-                throw new DaplugAPIException("Error: " + response.SW1 + response.SW2);
+                throw new DaplugAPIException("Error selecting file.", response.SW1, response.SW2);
 
             return response.ResponseData;
         }
 
-        public async Task SelectPathAsync(params ushort[] path)
+        public async Task<byte[]> SelectPathAsync(params ushort[] path)
         {
+            byte[] result = null;
             foreach (ushort p in path)
             {
-                await SelectFileAsync(p);
+                result = await SelectFileAsync(p);
             }
+
+            return result;
         }
+
+
 
         public async Task DeleteFileOrDirAsync(ushort fileID)
         {
@@ -270,27 +289,176 @@ namespace daplug.net
             var response = await ExchangeAPDUAsync(command);
 
             if (!response.IsSuccessfulResponse)
-                throw new DaplugAPIException("Error: " + response.SW1 + response.SW2);
+                throw new DaplugAPIException("Unable to delete the file.", response.SW1, response.SW2);
         }
 
-        public async Task<byte[]> ReadFileAsync(ushort offset, byte length)
+        private async Task<List<byte>> ReadFileDataInternalAsync(ushort offset, byte length)
         {
-
             var offsetBytes = Helpers.UShortToByteArray(offset);
 
-            var readFileCommand = new byte[] { 0x80, 0xB0, offsetBytes[0], offsetBytes[1], (SessionKeys != null) ? (byte)0x00 : length };
+            //header
+            var readDataCommandAPDUBytes = new List<byte> { 0x80, 0xB0, offsetBytes[0], offsetBytes[1], (SessionKeys != null) ? (byte)0x00 : length };
 
-            var command = new APDUCommand(readFileCommand);
+            var command = new APDUCommand(readDataCommandAPDUBytes);
 
             var response = await ExchangeAPDUAsync(command);
 
             if (!response.IsSuccessfulResponse)
-                throw new DaplugAPIException("Error: " + response.SW1 + response.SW2);
+                throw new DaplugAPIException("Error reading data: " + response.SW1 + response.SW2);
 
-            return response.ResponseData;
+            return new List<byte>(response.ResponseData);
         }
 
+        public async Task<byte[]> ReadFileDataAsync(ushort offset, ushort length)
+        {
+            if (offset + length > MAX_FS_FILE_SIZE)
+                throw new DaplugAPIException("Maximum filesize (" + MAX_FS_FILE_SIZE + ") exceeded.");
 
+            ushort dataLength = length;
+            ushort readOffset = offset;
+            List<byte> result = new List<byte>();
+
+            while (dataLength > MAX_IO_DATA_SIZE)
+            {
+                var readResult = await ReadFileDataInternalAsync(readOffset, MAX_IO_DATA_SIZE);
+                result.AddRange(readResult);
+                readOffset += MAX_IO_DATA_SIZE;
+                dataLength -= MAX_IO_DATA_SIZE;
+            }
+            if (dataLength > 0)
+            {
+                var readResult = await ReadFileDataInternalAsync(readOffset, (byte)dataLength);
+                result.AddRange(readResult);
+            }
+
+            return result.ToArray();
+        }
+
+        private async Task WriteFileDataInternalAsync(ushort offset, List<byte> data, ushort seek, byte count)
+        {
+            var offsetBytes = Helpers.UShortToByteArray(offset);
+
+            //header
+            var writeDataCommandAPDUBytes = new List<byte> { 0x80, 0xD6, offsetBytes[0], offsetBytes[1], (byte)count };
+
+            //append data 
+            writeDataCommandAPDUBytes.AddRange(data.Skip(seek).Take(count));
+
+            var command = new APDUCommand(writeDataCommandAPDUBytes);
+
+            var response = await ExchangeAPDUAsync(command);
+
+            if (!response.IsSuccessfulResponse)
+                throw new DaplugAPIException("Error writing data: " + response.SW1 + response.SW2);
+        }
+
+        public async Task WriteFileDataAsync(ushort offset, List<byte> dataToWrite)
+        {
+            if (offset + dataToWrite.Count > MAX_FS_FILE_SIZE)
+                throw new DaplugAPIException("Maximum filesize (" + MAX_FS_FILE_SIZE + ") exceeded.");
+
+            ushort dataLength = (ushort)dataToWrite.Count;
+            ushort writeOffset = offset;
+
+            while (dataLength > MAX_IO_DATA_SIZE)
+            {
+                await WriteFileDataInternalAsync(writeOffset, dataToWrite, writeOffset, MAX_IO_DATA_SIZE);
+                writeOffset += MAX_IO_DATA_SIZE;
+                dataLength -= MAX_IO_DATA_SIZE;
+            }
+            if (dataLength > 0)
+                await WriteFileDataInternalAsync((ushort)(writeOffset + offset), dataToWrite, writeOffset, (byte)dataLength);
+        }
+
+        public async Task WriteFileDataAsync(ushort offset, byte[] dataToWrite)
+        {
+            await WriteFileDataAsync(offset, new List<byte>(dataToWrite));
+        }
+
+        public async Task CreateFileAsync(ushort fileId, ushort size, byte deleteFileAccessCondition, byte updateAccessCondition, byte readAccessCondition, bool isEncryptedFile = false, bool isCounterFile = false)
+        {
+            //This function is denied for non counter files if the FILE license is not present. 
+            if (isCounterFile == false)
+                await CheckLicencedOptionAsync(DaplugLicensing.FILE);
+
+
+            var createFileCommandAPDUBytes = new List<byte> { 0x80, 0xE0, 0x00, 0x00, 0x1c }; //header
+
+            //62 14 82 02 01 21 83 02 
+            var createFileCommandAPDUData = new List<byte> { 0x62, 0x14, 0x82, 0x02, 0x01, 0x21, 0x83, 0x02 };
+
+            createFileCommandAPDUData.AddRange(Helpers.UShortToByteArray(fileId));
+            createFileCommandAPDUData.Add(0x81);
+            createFileCommandAPDUData.Add(0x02);
+
+            if (isCounterFile)
+                size = 8;
+
+            createFileCommandAPDUData.AddRange(Helpers.UShortToByteArray(size));
+
+            //Security Attributes
+            createFileCommandAPDUData.AddRange(new List<byte> { 0x8c, 0x06, 0x00, deleteFileAccessCondition, 0x00, 0x00, updateAccessCondition, readAccessCondition });
+
+            //File encryption
+            byte enableEncryptionValue = 0x00;
+            if (isEncryptedFile)
+                enableEncryptionValue = 0x01;
+
+            createFileCommandAPDUData.AddRange(new List<byte> { 0x86, 0x01, enableEncryptionValue });
+
+            //Counter file
+            byte isCounterFileValue = 0x00;
+            if (isCounterFile)
+                isCounterFileValue = 0x01;
+
+            createFileCommandAPDUData.AddRange(new List<byte> { 0x87, 0x01, isCounterFileValue });
+
+
+            createFileCommandAPDUBytes.AddRange(createFileCommandAPDUData);
+
+            var createDirCommand = new APDUCommand(createFileCommandAPDUBytes.ToArray());
+
+            var response = await ExchangeAPDUAsync(createDirCommand);
+
+            if (!response.IsSuccessfulResponse)
+                throw new DaplugAPIException("An error ocurred while creating the file.", response.SW1, response.SW2);
+
+        }
+
+        public async Task CreateFileAsync(ushort fileId, ushort size, byte accessCondition, bool isEncryptedFile = false, bool isCounterFile = false)
+        {
+            await CreateFileAsync(fileId, size, accessCondition, accessCondition, accessCondition, isEncryptedFile, isCounterFile);
+        }
+
+        public async Task CreateDirectoryAsync(ushort directoryId, byte deleteSelfAccessCondition, byte createDirAccessCondition, byte createFileAccessCondition)
+        {
+            //Check if this device has a FILE license
+            await CheckLicencedOptionAsync(DaplugLicensing.FILE);
+
+
+            var createDirCommandAPDUBytes = new List<byte> { 0x80, 0xE0, 0x00, 0x00, 0x10 }; //header
+
+            var createDirCommandAPDUData = new List<byte> { 0x62, 0x0E, 0x82, 0x02, 0x32, 0x21, 0x83, 0x02 };
+
+            createDirCommandAPDUData.AddRange(Helpers.UShortToByteArray(directoryId));
+
+            createDirCommandAPDUData.AddRange(new List<byte> { 0x8c, 0x04, 0x00, deleteSelfAccessCondition, createDirAccessCondition, createFileAccessCondition });
+
+            createDirCommandAPDUBytes.AddRange(createDirCommandAPDUData);
+
+            var createDirCommand = new APDUCommand(createDirCommandAPDUBytes.ToArray());
+
+            var response = await ExchangeAPDUAsync(createDirCommand);
+
+            if (!response.IsSuccessfulResponse)
+                throw new DaplugAPIException("An error ocurred while creating the directory.", response.SW1, response.SW2);
+
+        }
+
+        public async Task CreateDirectoryAsync(ushort directoryId, byte accessCondition)
+        {
+            await CreateDirectoryAsync(directoryId, accessCondition, accessCondition, accessCondition);
+        }
 
         private List<byte> PrepareKeyToPutKeyCommand(byte[] key, byte keyUsage, ushort keyAccess)
         {
@@ -301,16 +469,16 @@ namespace daplug.net
             result.AddRange(encryptedKey);
 
             //Key Check Value
-            result.Add(0x03); //KCV Lenght
+            result.Add(0x03); //KCV Length
             var keyCheckValue = Crypto.CalculateKCV(key);
             result.AddRange(keyCheckValue);
 
             //key usage
-            result.Add(0x01); //key usage lenght
+            result.Add(0x01); //key usage length
             result.Add(keyUsage);
 
             //key access
-            result.Add(0x02); //key access lenght
+            result.Add(0x02); //key access length
             result.AddRange(Helpers.UShortToByteArray(keyAccess));
 
             return result;
@@ -400,7 +568,8 @@ namespace daplug.net
         public async Task<DaplugLicensing> GetLicensedOptionsAsync()
         {
             await SelectPathAsync(DaplugConstants.MasterFileId, DaplugConstants.InternalConfigDirId, DaplugConstants.ApplicationStatesDirId, DaplugConstants.LicensingFileId);
-            var licFileContents = await ReadFileAsync(0, 2);
+            var licFileContents = await ReadFileDataAsync(0, 2);
+            await SelectFileAsync(DaplugConstants.MasterFileId);
             return (DaplugLicensing)licFileContents[0];
         }
 
@@ -410,7 +579,7 @@ namespace daplug.net
             GC.SuppressFinalize(this);
         }
 
-        public virtual void Dispose(bool disposing)
+        protected virtual void Dispose(bool disposing)
         {
             if (disposing)
             {

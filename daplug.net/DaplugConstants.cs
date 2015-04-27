@@ -13,5 +13,8 @@ namespace daplug.net
         public static readonly ushort ApplicationStatesDirId = 0xd00d;
         public static readonly ushort SecretCodesDirId = 0xc0de;
         public static readonly ushort LicensingFileId = 0xa1ba;
+
+        public static readonly byte AccessAlways = 0x00;
+        public static readonly byte AccessNever = 0xff;
     }
 }

@@ -33,6 +33,7 @@ namespace daplug.net.test
                     await TestGetStatus(api);
                     await TestGetLicensedOptions(api);
                     await TestPutKey(api);
+                    await TestFilesystem(api);
                 }
             }
             catch (Exception e)
@@ -70,6 +71,51 @@ namespace daplug.net.test
             WriteSuccess("License File: {0}", licFileContents);
         }
 
+        public static async Task TestFilesystem(DaplugAPI api)
+        {
+            ushort dirId = 0x2012;
+            ushort fileId = 1001;
+            ushort testDataLength = 600;
+            byte[] testBytes = new byte[testDataLength];
+            Random rnd = new Random();
+            rnd.NextBytes(testBytes);
+
+            WriteTitle();
+            WriteInfo("Opening Secure Channel...");
+            await api.OpenSecureChannelAsync(defaultKeyset, fullSecurityLevel);
+            WriteInfo("Selecting Master File...");
+            await api.SelectPathAsync(DaplugConstants.MasterFileId);
+            WriteInfo("Creating DF 0x{0:X2}...", dirId);
+            await api.CreateDirectoryAsync(dirId, DaplugConstants.AccessAlways);
+            WriteInfo("Selecting DF 0x{0:X2}...", dirId);
+            var result = await api.SelectPathAsync(dirId);
+            WriteInfo("Creating File 0x{0:X2}...", fileId);
+            await api.CreateFileAsync(fileId, testDataLength, DaplugConstants.AccessAlways);
+            WriteInfo("Selecting File 0x{0:X2}...", fileId);
+            await api.SelectFileAsync(fileId);
+            WriteInfo("Writing test data to file...");
+            await api.WriteFileDataAsync(0, testBytes);
+            WriteInfo("Reading test data to file...");
+            var fileContents = await api.ReadFileDataAsync(0, testDataLength);
+            bool readTestSuccess = testBytes.SequenceEqual(fileContents);
+            if (readTestSuccess)
+                WriteSuccess("Success! Read data matches Test data.");
+            else
+                WriteFail("Fail! Read data does not match Test data.");
+            WriteInfo("Selecting Master File...");
+            await api.SelectPathAsync(DaplugConstants.MasterFileId);
+            WriteInfo("Selecting DF 0x{0:X2}...", dirId);
+            await api.SelectPathAsync(dirId);
+            WriteInfo("Deleting File 0x{0:X2}...", fileId);
+            await api.DeleteFileOrDirAsync(fileId);
+            WriteInfo("Selecting Master File...");
+            await api.SelectPathAsync(DaplugConstants.MasterFileId);
+            WriteInfo("Deleting DF 0x{0:X2}...", dirId);
+            await api.DeleteFileOrDirAsync(dirId);
+            api.CloseSecureChannel();
+            WriteSuccess("Success!");
+        }
+
         private static async Task TestPutKey(DaplugAPI api)
         {
             WriteTitle();
@@ -77,11 +123,11 @@ namespace daplug.net.test
             WriteInfo("Putting key 0x65...");
             await api.PutKeyAsync(testKeyset);
             api.CloseSecureChannel();
-            WriteInfo("Opening Secure Channel with key 0x65...");
+            WriteInfo("Opening Secure Channel with key 0x{0:X2}...", testKeyset.Version);
             await api.OpenSecureChannelAsync(testKeyset, cMacSecurityLevel);
             WriteSuccess("Success!");
             api.CloseSecureChannel();
-            WriteInfo("Deleting key 0x65...");
+            WriteInfo("Deleting key 0x{0:X2}...", testKeyset.Version);
             await api.OpenSecureChannelAsync(defaultKeyset, cMacSecurityLevel);
             await api.DeleteKeyAsync(testKeyset.Version);
             api.CloseSecureChannel();
@@ -101,11 +147,18 @@ namespace daplug.net.test
             Console.WriteLine(string.Format(message, args));
             Console.ResetColor();
         }
-        
-        private static void WriteInfo(string message)
+
+        private static void WriteFail(string error)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine(error);
+            Console.ResetColor();
+        }
+
+        private static void WriteInfo(string message, params object[] args)
         {
             Console.ForegroundColor = ConsoleColor.Cyan;
-            Console.WriteLine(message);
+            Console.WriteLine(string.Format(message, args));
             Console.ResetColor();
         }
 
@@ -120,10 +173,7 @@ namespace daplug.net.test
         }
         private static void WriteTitle([CallerMemberName]string testname = "")
         {
-            Console.BackgroundColor = ConsoleColor.White;
-            Console.ForegroundColor = ConsoleColor.Black;
             Console.WriteLine("~~~~~~ {0} ~~~~~~", testname);
-            Console.ResetColor();
         }
     }
 }

@@ -43,7 +43,7 @@ namespace daplug.net.Dongle.WinUSB
                 throw new DaplugCommunicationException("Error while sendind command: " + errorCode + ". " + UsbDevice.LastErrorString);
 
             int bytesRead;
-            byte[] readBuffer = new byte[64];
+            byte[] readBuffer = new byte[512];
             var receiveError = daplugReader.Read(readBuffer, 1000, out bytesRead);
             if (receiveError != ErrorCode.None)
                 throw new DaplugCommunicationException("Error while receiving response: " + receiveError + ". " + UsbDevice.LastErrorString);
@@ -52,10 +52,10 @@ namespace daplug.net.Dongle.WinUSB
 
             APDUResponse response;
 
-            //if response starts with 0x61, the next byte is the response lenght
+            //if response starts with 0x61, the next byte is the response length
             if (readBuffer[0] == 0x61)
             {
-                byte[] responseData = new byte[readBuffer[1] + 2]; //we add 2 to the response lenght to account for the SW bytes
+                byte[] responseData = new byte[readBuffer[1] + 2]; //we add 2 to the response length to account for the SW bytes
                 Array.Copy(readBuffer, 2, responseData, 0, responseData.Length);
                 response = new APDUResponse(responseData);
             }
@@ -79,7 +79,7 @@ namespace daplug.net.Dongle.WinUSB
             GC.SuppressFinalize(this);
         }
 
-        public virtual void Dispose(bool disposing)
+        protected virtual void Dispose(bool disposing)
         {
             if (disposing)
             {

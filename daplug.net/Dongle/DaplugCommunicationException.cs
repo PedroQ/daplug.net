@@ -5,6 +5,7 @@ using System.Text;
 
 namespace daplug.net.Dongle
 {
+    [Serializable]
     public class DaplugCommunicationException : Exception
     {
         public DaplugCommunicationException() { }
