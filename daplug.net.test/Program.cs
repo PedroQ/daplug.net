@@ -34,6 +34,7 @@ namespace daplug.net.test
                     await TestGetLicensedOptions(api);
                     await TestPutKey(api);
                     await TestFilesystem(api);
+                    await TestGenerateRandom(api);
                 }
             }
             catch (Exception e)
@@ -69,6 +70,23 @@ namespace daplug.net.test
             WriteTitle();
             var licFileContents = await api.GetLicensedOptionsAsync();
             WriteSuccess("License File: {0}", licFileContents);
+        }
+
+        private static async Task TestPutKey(DaplugAPI api)
+        {
+            WriteTitle();
+            await api.OpenSecureChannelAsync(defaultKeyset, cMacSecurityLevel);
+            WriteInfo("Putting key 0x65...");
+            await api.PutKeyAsync(testKeyset);
+            api.CloseSecureChannel();
+            WriteInfo("Opening Secure Channel with key 0x{0:X2}...", testKeyset.Version);
+            await api.OpenSecureChannelAsync(testKeyset, cMacSecurityLevel);
+            WriteSuccess("Success!");
+            api.CloseSecureChannel();
+            WriteInfo("Deleting key 0x{0:X2}...", testKeyset.Version);
+            await api.OpenSecureChannelAsync(defaultKeyset, cMacSecurityLevel);
+            await api.DeleteKeyAsync(testKeyset.Version);
+            api.CloseSecureChannel();
         }
 
         public static async Task TestFilesystem(DaplugAPI api)
@@ -116,23 +134,18 @@ namespace daplug.net.test
             WriteSuccess("Success!");
         }
 
-        private static async Task TestPutKey(DaplugAPI api)
+        public static async Task TestGenerateRandom(DaplugAPI api)
         {
-            WriteTitle();
-            await api.OpenSecureChannelAsync(defaultKeyset, cMacSecurityLevel);
-            WriteInfo("Putting key 0x65...");
-            await api.PutKeyAsync(testKeyset);
-            api.CloseSecureChannel();
-            WriteInfo("Opening Secure Channel with key 0x{0:X2}...", testKeyset.Version);
-            await api.OpenSecureChannelAsync(testKeyset, cMacSecurityLevel);
-            WriteSuccess("Success!");
-            api.CloseSecureChannel();
-            WriteInfo("Deleting key 0x{0:X2}...", testKeyset.Version);
-            await api.OpenSecureChannelAsync(defaultKeyset, cMacSecurityLevel);
-            await api.DeleteKeyAsync(testKeyset.Version);
-            api.CloseSecureChannel();
-        }
+            byte numBytes = 128;
 
+            WriteTitle();
+            WriteInfo("Opening Secure Channel...");
+            await api.OpenSecureChannelAsync(defaultKeyset, fullSecurityLevel);
+            var randomBytes = await api.GenerateRandomAsync(numBytes);
+            WriteSuccess("Success! Got {0} random bytes.", numBytes);
+            api.CloseSecureChannel();
+
+        }
 
         private static void WriteSuccess(string message)
         {

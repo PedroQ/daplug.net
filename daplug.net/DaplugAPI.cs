@@ -248,6 +248,58 @@ namespace daplug.net
             return (DaplugStatus)response.ResponseData[9];
         }
 
+        public async Task<bool> UsbToHidAsync()
+        {
+            var usbToHidCommand = new byte[] { 0xD0, 0x52, 0x08, 0x01, 0x00 };
+
+            var command = new APDUCommand(usbToHidCommand);
+
+            var response = await ExchangeAPDUAsync(command);
+
+            return response.IsSuccessfulResponse;
+        }
+
+        public async Task<bool> HidToUsbAsync()
+        {
+            var HidToUsbCommand = new byte[] { 0xD0, 0x52, 0x08, 0x02, 0x00 };
+
+            var command = new APDUCommand(HidToUsbCommand);
+
+            var response = await ExchangeAPDUAsync(command);
+
+            return response.IsSuccessfulResponse;
+        }
+
+        public async Task<bool> ResetAsync()
+        {
+            var resetCommand = new byte[] { 0xD0, 0x52, 0x01, 0x00, 0x00 };
+
+            var command = new APDUCommand(resetCommand);
+
+            var response = await ExchangeAPDUAsync(command);
+
+            return response.IsSuccessfulResponse;
+        }
+
+        public async Task<bool> HaltAsync()
+        {
+            var haltCommand = new byte[] { 0xD0, 0x52, 0x02, 0x00, 0x00 };
+
+            var command = new APDUCommand(haltCommand);
+
+            var response = await ExchangeAPDUAsync(command);
+
+            return response.IsSuccessfulResponse;
+        }
+
+        public async Task<DaplugLicensing> GetLicensedOptionsAsync()
+        {
+            await SelectPathAsync(DaplugConstants.MasterFileId, DaplugConstants.InternalConfigDirId, DaplugConstants.ApplicationStatesDirId, DaplugConstants.LicensingFileId);
+            var licFileContents = await ReadFileDataAsync(0, 2);
+            await SelectFileAsync(DaplugConstants.MasterFileId);
+            return (DaplugLicensing)licFileContents[0];
+        }
+
         public async Task<byte[]> SelectFileAsync(ushort fileID)
         {
 
@@ -521,56 +573,24 @@ namespace daplug.net
             await DeleteFileOrDirAsync(keyFileID);
         }
 
-        public async Task<bool> UsbToHidAsync()
+        public async Task<byte[]> GenerateRandomAsync(byte length)
         {
-            var usbToHidCommand = new byte[] { 0xD0, 0x52, 0x08, 0x01, 0x00 };
+            if (length > MAX_IO_DATA_SIZE)
+                throw new ArgumentException("Length must be between 0 and " + MAX_IO_DATA_SIZE, "length");
 
-            var command = new APDUCommand(usbToHidCommand);
+            var generateRandomCommandAPDUBytes = new byte[] { 0xD0, 0x24, 0x00, 0x00, length };
+            
+            // append <length> bytes to the command APDU so that Le matches the Lc
+            generateRandomCommandAPDUBytes = generateRandomCommandAPDUBytes.Concat(new byte[length]).ToArray();
 
-            var response = await ExchangeAPDUAsync(command);
+            var generateRandomCommand = new APDUCommand(generateRandomCommandAPDUBytes);
 
-            return response.IsSuccessfulResponse;
-        }
+            var response = await ExchangeAPDUAsync(generateRandomCommand);
 
-        public async Task<bool> HidToUsbAsync()
-        {
-            var HidToUsbCommand = new byte[] { 0xD0, 0x52, 0x08, 0x02, 0x00 };
+            if (!response.IsSuccessfulResponse)
+                throw new DaplugAPIException("An error ocurred while generating random bytes.", response.SW1, response.SW2);
 
-            var command = new APDUCommand(HidToUsbCommand);
-
-            var response = await ExchangeAPDUAsync(command);
-
-            return response.IsSuccessfulResponse;
-        }
-
-        public async Task<bool> ResetAsync()
-        {
-            var resetCommand = new byte[] { 0xD0, 0x52, 0x01, 0x00, 0x00 };
-
-            var command = new APDUCommand(resetCommand);
-
-            var response = await ExchangeAPDUAsync(command);
-
-            return response.IsSuccessfulResponse;
-        }
-
-        public async Task<bool> HaltAsync()
-        {
-            var haltCommand = new byte[] { 0xD0, 0x52, 0x02, 0x00, 0x00 };
-
-            var command = new APDUCommand(haltCommand);
-
-            var response = await ExchangeAPDUAsync(command);
-
-            return response.IsSuccessfulResponse;
-        }
-
-        public async Task<DaplugLicensing> GetLicensedOptionsAsync()
-        {
-            await SelectPathAsync(DaplugConstants.MasterFileId, DaplugConstants.InternalConfigDirId, DaplugConstants.ApplicationStatesDirId, DaplugConstants.LicensingFileId);
-            var licFileContents = await ReadFileDataAsync(0, 2);
-            await SelectFileAsync(DaplugConstants.MasterFileId);
-            return (DaplugLicensing)licFileContents[0];
+            return response.ResponseData;
         }
 
         public void Dispose()
