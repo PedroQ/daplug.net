@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -37,6 +38,26 @@ namespace daplug.net
         Personalized = 0x0f,
         Terminated = 0x7f,
         Locked = 0x83
+    }
+
+    [Flags]
+    public enum DaplugCryptoOptions : byte
+    {
+        //01: use ECB mode
+        //02: use CBC mode
+        //04: use one diversifier
+        //08: use two diversifiers
+        ModeECB = 0x01,
+        ModeCBC = 0x02,
+        OneDiversifier = 0x04,
+        TwoDiversifiers = 0x08
+    }
+
+    public enum DaplugKeyType : byte
+    {
+        EncryptionKey = 0x01,
+        MACKey = 0x02,
+        KeyEncryptionKey = 0x03
     }
 
     public class DaplugAPI : IDisposable
@@ -74,6 +95,12 @@ namespace daplug.net
 
             if (LicensedOptions.HasFlag(option) == false)
                 throw new DaplugAPIException("This token does not have a " + option + " license.");
+        }
+
+        private void CheckSecureChannelOpen([CallerMemberName] string callerMethodName = "")
+        {
+            if (SessionKeys == null)
+                throw new DaplugAPIException("You need to open a Secure Channel to use the " + callerMethodName + " method.");
         }
 
         public async Task<APDUResponse> ExchangeAPDUAsync(APDUCommand apdu)
@@ -160,6 +187,9 @@ namespace daplug.net
             if (keyset.EncKey == null || keyset.MacKey == null || keyset.DeKey == null)
                 throw new DaplugAPIException("Invalid keyset.");
 
+            if (securityLevel.HasFlag(DaplugSecurityLevel.COMMAND_MAC) == false)
+                securityLevel |= DaplugSecurityLevel.COMMAND_MAC;
+
             if (hostChallenge == null)
             {
                 Random rnd = new Random();
@@ -191,8 +221,6 @@ namespace daplug.net
 
             var hostCryptogram = DaplugCrypto.CalculateCryptogram(tempSessionKeys, cardChallenge, hostChallenge);
 
-            if (securityLevel.HasFlag(DaplugSecurityLevel.COMMAND_MAC) == false)
-                securityLevel |= DaplugSecurityLevel.COMMAND_MAC;
 
             tempSessionKeys.SecurityLevel = securityLevel;
 
@@ -539,6 +567,7 @@ namespace daplug.net
 
         public async Task PutKeyAsync(DaplugKeySet key, byte mode = 0x81)
         {
+            CheckSecureChannelOpen();
 
             var putKeyCommandAPDUBytes = new List<byte> { 0x80, 0xD8, key.Version, mode, 0x00 }; //header
 
@@ -579,7 +608,7 @@ namespace daplug.net
                 throw new ArgumentException("Length must be between 0 and " + MAX_IO_DATA_SIZE, "length");
 
             var generateRandomCommandAPDUBytes = new byte[] { 0xD0, 0x24, 0x00, 0x00, length };
-            
+
             // append <length> bytes to the command APDU so that Le matches the Lc
             generateRandomCommandAPDUBytes = generateRandomCommandAPDUBytes.Concat(new byte[length]).ToArray();
 
@@ -591,6 +620,88 @@ namespace daplug.net
                 throw new DaplugAPIException("An error ocurred while generating random bytes.", response.SW1, response.SW2);
 
             return response.ResponseData;
+        }
+
+        private async Task<byte[]> EncryptOrDecryptDataInternalAsync(byte keyVersion, DaplugKeyType keyType, DaplugCryptoOptions options, byte[] data, bool decrypt, byte[] iv = null, byte[] diversifier1 = null, byte[] diversifier2 = null)
+        {
+            //This function is only available if the CRYPTO license is set.
+            await CheckLicencedOptionAsync(DaplugLicensing.CRYPTO);
+
+            if (data.Length % 8 != 0)
+                throw new ArgumentException("Data length must be a multiple of 8 bytes.", "data");
+
+            byte apduDataLenght = 10; //key version (1) + key id (1) + iv (8);
+
+            if (options.HasFlag(DaplugCryptoOptions.OneDiversifier) || options.HasFlag(DaplugCryptoOptions.TwoDiversifiers))
+            {
+                if (diversifier1 == null)
+                    throw new ArgumentException("Diversifier 1 is required when using the OneDiversifier or TwoDiversifiers option.", "diversifier1");
+
+                if (diversifier1.Length != 16)
+                    throw new ArgumentException("Diversifier 1 must be 16 bytes long.", "diversifier1");
+
+                apduDataLenght += 16;
+            }
+
+            if (options.HasFlag(DaplugCryptoOptions.TwoDiversifiers))
+            {
+                if (diversifier2 == null)
+                    throw new ArgumentException("Diversifier 2 is required when using the TwoDiversifiers option.", "diversifier2");
+
+                if (diversifier2.Length != 16)
+                    throw new ArgumentException("Diversifier 1 must be 16 bytes long.", "diversifier2");
+
+                apduDataLenght += 16;
+            }
+
+            if (data.Length + apduDataLenght > MAX_IO_DATA_SIZE)
+                throw new ArgumentException("Data length limit exceeded.", "data");
+
+
+            //if no IV is supplied, set the IV to a new array of 8 0x0 bytes
+            if (iv == null)
+                iv = new byte[8];
+            else if (iv.Length != 8)
+                throw new ArgumentException("IV must be 8 bytes long.", "iv");
+
+            //0x01 = encrypt, 0x02 = decrypt
+            byte selectedFunction = 0x01;
+            if (decrypt)
+                selectedFunction = 0x02;
+
+            var encryptOrDecryptCommandAPDUBytes = new List<byte> { 0xD0, 0x20, selectedFunction, (byte)options, 0x00 };
+
+            encryptOrDecryptCommandAPDUBytes.Add(keyVersion);
+            encryptOrDecryptCommandAPDUBytes.Add((byte)keyType);
+            encryptOrDecryptCommandAPDUBytes.AddRange(iv);
+
+            if (options.HasFlag(DaplugCryptoOptions.OneDiversifier) || options.HasFlag(DaplugCryptoOptions.TwoDiversifiers))
+                encryptOrDecryptCommandAPDUBytes.AddRange(diversifier1);
+
+            if (options.HasFlag(DaplugCryptoOptions.TwoDiversifiers))
+                encryptOrDecryptCommandAPDUBytes.AddRange(diversifier2);
+
+            encryptOrDecryptCommandAPDUBytes.AddRange(data);
+
+            var cryptCommand = new APDUCommand(encryptOrDecryptCommandAPDUBytes);
+
+            var response = await ExchangeAPDUAsync(cryptCommand);
+
+            if (response.IsSuccessfulResponse == false)
+                throw new DaplugAPIException("An error ocurred while performing the cryptography operation.", response.SW1, response.SW2);
+
+            return response.ResponseData;
+
+        }
+
+        public async Task<byte[]> EncryptDataAsync(byte keyVersion, DaplugKeyType keyType, DaplugCryptoOptions options, byte[] plaintext, byte[] iv = null, byte[] diversifier1 = null, byte[] diversifier2 = null)
+        {
+            return await EncryptOrDecryptDataInternalAsync(keyVersion, keyType, options, plaintext, false, iv, diversifier1, diversifier2);
+        }
+
+        public async Task<byte[]> DecryptDataAsync(byte keyVersion, DaplugKeyType keyType, DaplugCryptoOptions oprions, byte[] ciphertext, byte[] iv = null, byte[] diversifier1 = null, byte[] diversifier2 = null)
+        {
+            return await EncryptOrDecryptDataInternalAsync(keyVersion, keyType, oprions, ciphertext, true, iv, diversifier1, diversifier2);
         }
 
         public void Dispose()

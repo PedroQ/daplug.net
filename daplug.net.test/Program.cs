@@ -35,6 +35,7 @@ namespace daplug.net.test
                     await TestPutKey(api);
                     await TestFilesystem(api);
                     await TestGenerateRandom(api);
+                    await TestCryptoOperations(api);
                 }
             }
             catch (Exception e)
@@ -145,6 +146,45 @@ namespace daplug.net.test
             WriteSuccess("Success! Got {0} random bytes.", numBytes);
             api.CloseSecureChannel();
 
+        }
+
+        public static async Task TestCryptoOperations(DaplugAPI api)
+        {
+            WriteTitle();
+            DaplugKeySet cryptoKeyset = new DaplugKeySet(0xCD, DaplugKeySet.KeyUsage.USAGE_ENC_DEC, DaplugConstants.AccessAlways, "404142434445464748494A4B4C4D4E4F");
+            DaplugCryptoOptions options = DaplugCryptoOptions.ModeCBC | DaplugCryptoOptions.TwoDiversifiers;
+
+            Random rnd = new Random();
+
+            byte[] testData = new byte[128];
+            byte[] iv = new byte[8];
+            byte[] div1 = new byte[16];
+            byte[] div2 = new byte[16];
+
+            rnd.NextBytes(testData);
+            rnd.NextBytes(iv);
+            rnd.NextBytes(div1);
+            rnd.NextBytes(div2);
+
+            WriteInfo("Opening Secure Channel...");
+            await api.OpenSecureChannelAsync(defaultKeyset, fullSecurityLevel);
+            WriteInfo("Setting up... Putting key with ID 0x{0:X2}...", cryptoKeyset.Version);
+            await api.PutKeyAsync(cryptoKeyset);
+
+            byte[] cipherText = await api.EncryptDataAsync(cryptoKeyset.Version, DaplugKeyType.EncryptionKey, options, testData, iv, div1, div2);
+            WriteSuccess("Got ciphertext.");
+            WriteInfo("Decrypting...");
+            byte[] plaintext = await api.DecryptDataAsync(cryptoKeyset.Version, DaplugKeyType.EncryptionKey, options, cipherText, iv, div1, div2);
+            WriteSuccess("Got plaintext.");
+            bool testDataMatches = plaintext.SequenceEqual(testData);
+            if (testDataMatches)
+                WriteSuccess("Plaintext matches test data.");
+            else
+                WriteFail("Plaintext does not match test data.");
+
+            WriteInfo("Cleaning up... Deleting key with ID 0x{0:X2}...", cryptoKeyset.Version);
+            await api.DeleteKeyAsync(cryptoKeyset.Version);
+            api.CloseSecureChannel();
         }
 
         private static void WriteSuccess(string message)
