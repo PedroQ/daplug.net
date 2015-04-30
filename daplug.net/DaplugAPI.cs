@@ -60,6 +60,24 @@ namespace daplug.net
         KeyEncryptionKey = 0x03
     }
 
+    [Flags]
+    public enum DaplugHMACOptions : byte
+    {
+        //00: no diversifier
+        //01: use 1 diversifier
+        //02: use 2 diversifiers
+        //10: compute HOTP with 6 digits
+        //20: compute HOTP with 7 digits
+        //40: compute HOTP with 8 digits
+
+        NoDiversifier = 0x00,
+        OneDiversifier = 0x01,
+        TwoDiversifiers = 0x02,
+        HOTP6Digits = 0x10,
+        HOTP7Digits = 0x20,
+        HOTP8Digits = 0x40
+    }
+
     public class DaplugAPI : IDisposable
     {
         public static readonly ushort MAX_FS_FILE_SIZE = 0xffff; //Max size of an EF
@@ -88,7 +106,7 @@ namespace daplug.net
 
         }
 
-        private async Task CheckLicencedOptionAsync(DaplugLicensing option)
+        private async Task ThrowIfLicenceOptionIsNotAvailable(DaplugLicensing option)
         {
             if (LicensedOptions == 0x00)
                 LicensedOptions = await GetLicensedOptionsAsync();
@@ -97,7 +115,7 @@ namespace daplug.net
                 throw new DaplugAPIException("This token does not have a " + option + " license.");
         }
 
-        private void CheckSecureChannelOpen([CallerMemberName] string callerMethodName = "")
+        private void ThrowIfNoSecureChannelOpen([CallerMemberName] string callerMethodName = "")
         {
             if (SessionKeys == null)
                 throw new DaplugAPIException("You need to open a Secure Channel to use the " + callerMethodName + " method.");
@@ -187,6 +205,7 @@ namespace daplug.net
             if (keyset.EncKey == null || keyset.MacKey == null || keyset.DeKey == null)
                 throw new DaplugAPIException("Invalid keyset.");
 
+            //M
             if (securityLevel.HasFlag(DaplugSecurityLevel.COMMAND_MAC) == false)
                 securityLevel |= DaplugSecurityLevel.COMMAND_MAC;
 
@@ -459,7 +478,7 @@ namespace daplug.net
         {
             //This function is denied for non counter files if the FILE license is not present. 
             if (isCounterFile == false)
-                await CheckLicencedOptionAsync(DaplugLicensing.FILE);
+                await ThrowIfLicenceOptionIsNotAvailable(DaplugLicensing.FILE);
 
 
             var createFileCommandAPDUBytes = new List<byte> { 0x80, 0xE0, 0x00, 0x00, 0x1c }; //header
@@ -513,7 +532,7 @@ namespace daplug.net
         public async Task CreateDirectoryAsync(ushort directoryId, byte deleteSelfAccessCondition, byte createDirAccessCondition, byte createFileAccessCondition)
         {
             //Check if this device has a FILE license
-            await CheckLicencedOptionAsync(DaplugLicensing.FILE);
+            await ThrowIfLicenceOptionIsNotAvailable(DaplugLicensing.FILE);
 
 
             var createDirCommandAPDUBytes = new List<byte> { 0x80, 0xE0, 0x00, 0x00, 0x10 }; //header
@@ -567,7 +586,7 @@ namespace daplug.net
 
         public async Task PutKeyAsync(DaplugKeySet key, byte mode = 0x81)
         {
-            CheckSecureChannelOpen();
+            ThrowIfNoSecureChannelOpen();
 
             var putKeyCommandAPDUBytes = new List<byte> { 0x80, 0xD8, key.Version, mode, 0x00 }; //header
 
@@ -622,10 +641,10 @@ namespace daplug.net
             return response.ResponseData;
         }
 
-        private async Task<byte[]> EncryptOrDecryptDataInternalAsync(byte keyVersion, DaplugKeyType keyType, DaplugCryptoOptions options, byte[] data, bool decrypt, byte[] iv = null, byte[] diversifier1 = null, byte[] diversifier2 = null)
+        private async Task<byte[]> EncryptOrDecryptDataInternalAsync(byte keyVersion, DaplugKeyType keyType, DaplugCryptoOptions options, byte[] data, bool decrypt, byte[] iv, byte[] diversifier1, byte[] diversifier2)
         {
             //This function is only available if the CRYPTO license is set.
-            await CheckLicencedOptionAsync(DaplugLicensing.CRYPTO);
+            await ThrowIfLicenceOptionIsNotAvailable(DaplugLicensing.CRYPTO);
 
             if (data.Length % 8 != 0)
                 throw new ArgumentException("Data length must be a multiple of 8 bytes.", "data");
@@ -688,7 +707,7 @@ namespace daplug.net
             var response = await ExchangeAPDUAsync(cryptCommand);
 
             if (response.IsSuccessfulResponse == false)
-                throw new DaplugAPIException("An error ocurred while performing the cryptography operation.", response.SW1, response.SW2);
+                throw new DaplugAPIException("An error ocurred while performing the cryptographic operation.", response.SW1, response.SW2);
 
             return response.ResponseData;
 
@@ -702,6 +721,70 @@ namespace daplug.net
         public async Task<byte[]> DecryptDataAsync(byte keyVersion, DaplugKeyType keyType, DaplugCryptoOptions oprions, byte[] ciphertext, byte[] iv = null, byte[] diversifier1 = null, byte[] diversifier2 = null)
         {
             return await EncryptOrDecryptDataInternalAsync(keyVersion, keyType, oprions, ciphertext, true, iv, diversifier1, diversifier2);
+        }
+
+        internal enum HMACMode
+        {
+            HMACSHA1,
+            HOTP,
+            TOTP
+        }
+
+        private async Task<byte[]> HMACInternalAsync(byte keyVersion, DaplugHMACOptions options, byte[] data, byte[] diversifier1, byte[] diversifier2)
+        {
+            byte apduDataLenght = 0;
+
+            if (options.HasFlag(DaplugHMACOptions.OneDiversifier) || options.HasFlag(DaplugHMACOptions.TwoDiversifiers))
+            {
+                if (diversifier1 == null)
+                    throw new ArgumentException("Diversifier 1 is required when using the OneDiversifier or TwoDiversifiers option.", "diversifier1");
+
+                if (diversifier1.Length != 16)
+                    throw new ArgumentException("Diversifier 1 must be 16 bytes long.", "diversifier1");
+
+                apduDataLenght += 16;
+            }
+
+            if (options.HasFlag(DaplugHMACOptions.TwoDiversifiers))
+            {
+                if (diversifier2 == null)
+                    throw new ArgumentException("Diversifier 2 is required when using the TwoDiversifiers option.", "diversifier2");
+
+                if (diversifier2.Length != 16)
+                    throw new ArgumentException("Diversifier 1 must be 16 bytes long.", "diversifier2");
+
+                apduDataLenght += 16;
+            }
+
+            if (data.Length + apduDataLenght > MAX_IO_DATA_SIZE)
+                throw new ArgumentException("Data length limit exceeded.", "data");
+
+            var hmacCommandAPDUBytes = new List<byte> { 0xD0, 0x22, keyVersion, (byte)options, 0x00 };
+
+            if (options.HasFlag(DaplugHMACOptions.OneDiversifier) || options.HasFlag(DaplugHMACOptions.TwoDiversifiers))
+                hmacCommandAPDUBytes.AddRange(diversifier1);
+
+            if (options.HasFlag(DaplugHMACOptions.TwoDiversifiers))
+                hmacCommandAPDUBytes.AddRange(diversifier2);
+
+            hmacCommandAPDUBytes.AddRange(data);
+
+            var hmacCommand = new APDUCommand(hmacCommandAPDUBytes);
+
+            var response = await ExchangeAPDUAsync(hmacCommand);
+
+            if (response.IsSuccessfulResponse == false)
+                throw new DaplugAPIException("An error ocurred while performing the cryptographic operation.", response.SW1, response.SW2);
+
+            return response.ResponseData;
+        }
+
+        public async Task<byte[]> HMACSHA1Async(byte keyVersion, DaplugHMACOptions options, byte[] data, byte[] diversifier1 = null, byte[] diversifier2 = null)
+        {
+            if (options.HasFlag(DaplugHMACOptions.HOTP6Digits) || options.HasFlag(DaplugHMACOptions.HOTP7Digits) || options.HasFlag(DaplugHMACOptions.HOTP8Digits))
+                throw new ArgumentException("Invalid options for the HMAC-SHA1 function.", "options");
+
+            return await HMACInternalAsync(keyVersion, options, data, diversifier1, diversifier2);
         }
 
         public void Dispose()

@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -36,6 +37,7 @@ namespace daplug.net.test
                     await TestFilesystem(api);
                     await TestGenerateRandom(api);
                     await TestCryptoOperations(api);
+                    await TestHMACSHA1(api);
                 }
             }
             catch (Exception e)
@@ -151,7 +153,8 @@ namespace daplug.net.test
         public static async Task TestCryptoOperations(DaplugAPI api)
         {
             WriteTitle();
-            DaplugKeySet cryptoKeyset = new DaplugKeySet(0xCD, DaplugKeySet.KeyUsage.USAGE_ENC_DEC, DaplugConstants.AccessAlways, "404142434445464748494A4B4C4D4E4F");
+            //Encryption/decryption keyset, access first byte codes the key access (here : 0 = always), access second byte codes the decryption access (here 0 = always)
+            DaplugKeySet cryptoKeyset = new DaplugKeySet(0xCD, DaplugKeySet.KeyUsage.USAGE_ENC_DEC, 0x0000, "404142434445464748494A4B4C4D4E4F");
             DaplugCryptoOptions options = DaplugCryptoOptions.ModeCBC | DaplugCryptoOptions.TwoDiversifiers;
 
             Random rnd = new Random();
@@ -184,6 +187,41 @@ namespace daplug.net.test
 
             WriteInfo("Cleaning up... Deleting key with ID 0x{0:X2}...", cryptoKeyset.Version);
             await api.DeleteKeyAsync(cryptoKeyset.Version);
+            api.CloseSecureChannel();
+        }
+
+        public static async Task TestHMACSHA1(DaplugAPI api)
+        {
+            WriteTitle();
+           
+            //Hmac-SHA1 keyset, access first byte codes the key access (here : 0 = always), access second byte codes the key length (must be < 48)
+            ushort hmacKeysetAccess = 48;
+            DaplugKeySet hmacKeyset = new DaplugKeySet(0xAC, DaplugKeySet.KeyUsage.USAGE_HMAC_SHA1, hmacKeysetAccess, "3fad384539a266c6b2dbc64619a876c8");
+            DaplugHMACOptions options = DaplugHMACOptions.NoDiversifier;
+
+            //calculate HMACSHA1 locally
+            var localHMACKey = StringToByteArray("3fad384539a266c6b2dbc64619a876c83fad384539a266c6b2dbc64619a876c83fad384539a266c6b2dbc64619a876c8");
+            HMACSHA1 hmacSha1 = new HMACSHA1(localHMACKey);
+
+            WriteInfo("Opening Secure Channel...");
+            await api.OpenSecureChannelAsync(defaultKeyset, fullSecurityLevel);
+            WriteInfo("Setting up... Putting key with ID 0x{0:X2}...", hmacKeyset.Version);
+            await api.PutKeyAsync(hmacKeyset);
+
+            byte[] data = Encoding.ASCII.GetBytes("Test With Truncation");
+            byte[] expectedSignature = hmacSha1.ComputeHash(data);
+
+            WriteInfo("Calling HMAC-SHA1...");
+            byte[] signature = await api.HMACSHA1Async(hmacKeyset.Version, options, data);
+
+            bool testDataMatches = signature.SequenceEqual(expectedSignature);
+            if (testDataMatches)
+                WriteSuccess("Signature matches test case.");
+            else
+                WriteFail("Signature does not match test case.");
+
+            WriteInfo("Cleaning up... Deleting key with ID 0x{0:X2}...", hmacKeyset.Version);
+            await api.DeleteKeyAsync(hmacKeyset.Version);
             api.CloseSecureChannel();
         }
 
@@ -227,6 +265,15 @@ namespace daplug.net.test
         private static void WriteTitle([CallerMemberName]string testname = "")
         {
             Console.WriteLine("~~~~~~ {0} ~~~~~~", testname);
+        }
+
+        private static byte[] StringToByteArray(String hex)
+        {
+            int NumberChars = hex.Length;
+            byte[] bytes = new byte[NumberChars / 2];
+            for (int i = 0; i < NumberChars; i += 2)
+                bytes[i / 2] = Convert.ToByte(hex.Substring(i, 2), 16);
+            return bytes;
         }
     }
 }

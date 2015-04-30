@@ -26,7 +26,7 @@ namespace daplug.net.Dongle.WinUSB
             {
                 if (r.Open(out usbDevice))
                 {
-                    daplugDevices.Add(string.Format("Dongle {0},WINUSB,{1},Plug-up", i++, usbDevice.UsbRegistryInfo.FullName));
+                    daplugDevices.Add(string.Format("Dongle {0},WINUSB,{1},Plug-up", i++, usbDevice.Info.ProductString));
                     usbDevice.Close();
                 }
             }
