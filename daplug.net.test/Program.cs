@@ -38,6 +38,7 @@ namespace daplug.net.test
                     await TestGenerateRandom(api);
                     await TestCryptoOperations(api);
                     await TestHMACSHA1(api);
+                    await TestHOTP(api);
                 }
             }
             catch (Exception e)
@@ -194,7 +195,7 @@ namespace daplug.net.test
         {
             WriteTitle();
            
-            //Hmac-SHA1 keyset, access first byte codes the key access (here : 0 = always), access second byte codes the key length (must be < 48)
+            //HMAC-SHA1 keyset, access first byte codes the key access (here : 0 = always), access second byte codes the key length (must be < 48)
             ushort hmacKeysetAccess = 48;
             DaplugKeySet hmacKeyset = new DaplugKeySet(0xAC, DaplugKeySet.KeyUsage.USAGE_HMAC_SHA1, hmacKeysetAccess, "3fad384539a266c6b2dbc64619a876c8");
             DaplugHMACOptions options = DaplugHMACOptions.NoDiversifier;
@@ -205,7 +206,7 @@ namespace daplug.net.test
 
             WriteInfo("Opening Secure Channel...");
             await api.OpenSecureChannelAsync(defaultKeyset, fullSecurityLevel);
-            WriteInfo("Setting up... Putting key with ID 0x{0:X2}...", hmacKeyset.Version);
+            WriteInfo("Setting up... Putting HMAC-SHA1 key with ID 0x{0:X2}...", hmacKeyset.Version);
             await api.PutKeyAsync(hmacKeyset);
 
             byte[] data = Encoding.ASCII.GetBytes("Test With Truncation");
@@ -223,6 +224,43 @@ namespace daplug.net.test
             WriteInfo("Cleaning up... Deleting key with ID 0x{0:X2}...", hmacKeyset.Version);
             await api.DeleteKeyAsync(hmacKeyset.Version);
             api.CloseSecureChannel();
+        }
+
+        public static async Task TestHOTP(DaplugAPI api)
+        {
+            WriteTitle();
+
+            //HMAC-SHA1 keyset, access first byte codes the key access (here : 0 = always), access second byte codes the key length (must be < 48)
+            ushort hotpKeysetAccess = 48;
+            DaplugKeySet hotpKeyset = new DaplugKeySet(0xAC, DaplugKeySet.KeyUsage.USAGE_HOTP, hotpKeysetAccess, "3fad384539a266c6b2dbc64619a876c8");
+            DaplugHMACOptions options = DaplugHMACOptions.HOTP6Digits;
+            ushort counterFileId = 0xc01d;
+
+            WriteInfo("Opening Secure Channel...");
+            await api.OpenSecureChannelAsync(defaultKeyset, fullSecurityLevel);
+            WriteInfo("Setting up... Putting HOTP key with ID 0x{0:X2}...", hotpKeyset.Version);
+            await api.PutKeyAsync(hotpKeyset);
+            WriteInfo("Creating counter file...");
+            await api.SelectPathAsync(DaplugConstants.MasterFileId, DaplugConstants.CountersDirId);
+            await api.CreateFileAsync(0xc01d, 8, DaplugConstants.AccessAlways, isCounterFile: true);
+
+            WriteInfo("Generating HOTP...");
+            byte[] hotpResult = await api.HOTPAsync(hotpKeyset.Version, options, counterFileId);
+
+            string hotpString = Encoding.UTF8.GetString(hotpResult);
+
+            WriteSuccess("Generated HTOP: {0}", hotpString);
+
+            WriteInfo("Cleaning up...");
+            WriteInfo("Deleting counter file...");
+            await api.SelectPathAsync(DaplugConstants.MasterFileId, DaplugConstants.CountersDirId);
+            await api.DeleteFileOrDirAsync(counterFileId);
+
+            WriteInfo("Deleting HOTP key with ID 0x{0:X2}...", hotpKeyset.Version);
+            await api.DeleteKeyAsync(hotpKeyset.Version);
+            api.CloseSecureChannel();
+
+
         }
 
         private static void WriteSuccess(string message)

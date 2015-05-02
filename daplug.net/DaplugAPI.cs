@@ -6,7 +6,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Text;
 using System.Threading.Tasks;
 
 namespace daplug.net
@@ -778,13 +777,31 @@ namespace daplug.net
 
             return response.ResponseData;
         }
-
+        
         public async Task<byte[]> HMACSHA1Async(byte keyVersion, DaplugHMACOptions options, byte[] data, byte[] diversifier1 = null, byte[] diversifier2 = null)
         {
             if (options.HasFlag(DaplugHMACOptions.HOTP6Digits) || options.HasFlag(DaplugHMACOptions.HOTP7Digits) || options.HasFlag(DaplugHMACOptions.HOTP8Digits))
                 throw new ArgumentException("Invalid options for the HMAC-SHA1 function.", "options");
 
             return await HMACInternalAsync(keyVersion, options, data, diversifier1, diversifier2);
+        }
+
+        public async Task<byte[]> HOTPAsync(byte keyVersion, DaplugHMACOptions options, byte[] data, byte[] diversifier1 = null, byte[] diversifier2 = null)
+        {
+            if (options.HasFlag(DaplugHMACOptions.HOTP6Digits) == false && options.HasFlag(DaplugHMACOptions.HOTP7Digits) == false && options.HasFlag(DaplugHMACOptions.HOTP8Digits) == false)
+                throw new ArgumentException("Invalid options for the HOTP function. Options must have an HOTP*Digits option flag.", "options");
+
+            //data must be the counter file ID when using and HOTP key or the counter data when using an HOTP_VALIDATION key
+            if (data.Length != 2 && data.Length != 8)
+                throw new ArgumentException("Invalid data length for the HOTP function. Data length must be 2 or 8 bytes long.", "data");
+
+
+            return await HMACInternalAsync(keyVersion, options, data, diversifier1, diversifier2);
+        }
+
+        public async Task<byte[]> HOTPAsync(byte keyVersion, DaplugHMACOptions options, ushort counterFileId, byte[] diversifier1 = null, byte[] diversifier2 = null)
+        {
+            return await HOTPAsync(keyVersion, options, Helpers.UShortToByteArray(counterFileId), diversifier1, diversifier2);
         }
 
         public void Dispose()

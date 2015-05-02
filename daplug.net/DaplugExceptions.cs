@@ -1,8 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace daplug.net
 {
@@ -33,7 +29,7 @@ namespace daplug.net
                 string msg = base.Message;
                 if (ResponseSW1 != 0 && ResponseSW2 != 0)
                 {
-                    string errorString = string.Format("Response SW: 0x{0:X2}{1:X2} ({0} {1})", ResponseSW1, ResponseSW2);
+                    string errorString = string.Format("Response SW: 0x{0:X2}{1:X2}", ResponseSW1, ResponseSW2);
                     return msg + Environment.NewLine + errorString;
                 }
                 else
