@@ -39,6 +39,7 @@ namespace daplug.net.test
                     await TestCryptoOperations(api);
                     await TestHMACSHA1(api);
                     await TestHOTP(api);
+                    await TestTOTP(api);
                 }
             }
             catch (Exception e)
@@ -155,7 +156,7 @@ namespace daplug.net.test
         {
             WriteTitle();
             //Encryption/decryption keyset, access first byte codes the key access (here : 0 = always), access second byte codes the decryption access (here 0 = always)
-            DaplugKeySet cryptoKeyset = new DaplugKeySet(0xCD, DaplugKeySet.KeyUsage.USAGE_ENC_DEC, 0x0000, "404142434445464748494A4B4C4D4E4F");
+            DaplugKeySet cryptoKeyset = new DaplugKeySet(0x31, DaplugKeySet.KeyUsage.USAGE_ENC_DEC, 0x0000, "404142434445464748494A4B4C4D4E4F");
             DaplugCryptoOptions options = DaplugCryptoOptions.ModeCBC | DaplugCryptoOptions.TwoDiversifiers;
 
             Random rnd = new Random();
@@ -194,10 +195,10 @@ namespace daplug.net.test
         public static async Task TestHMACSHA1(DaplugAPI api)
         {
             WriteTitle();
-           
+
             //HMAC-SHA1 keyset, access first byte codes the key access (here : 0 = always), access second byte codes the key length (must be < 48)
             ushort hmacKeysetAccess = 48;
-            DaplugKeySet hmacKeyset = new DaplugKeySet(0xAC, DaplugKeySet.KeyUsage.USAGE_HMAC_SHA1, hmacKeysetAccess, "3fad384539a266c6b2dbc64619a876c8");
+            DaplugKeySet hmacKeyset = new DaplugKeySet(0x32, DaplugKeySet.KeyUsage.USAGE_HMAC_SHA1, hmacKeysetAccess, "3fad384539a266c6b2dbc64619a876c8");
             DaplugHMACOptions options = DaplugHMACOptions.NoDiversifier;
 
             //calculate HMACSHA1 locally
@@ -230,9 +231,9 @@ namespace daplug.net.test
         {
             WriteTitle();
 
-            //HMAC-SHA1 keyset, access first byte codes the key access (here : 0 = always), access second byte codes the key length (must be < 48)
+            //HOTP keyset, access first byte codes the key access (here : 0 = always), access second byte codes the key length (must be < 48)
             ushort hotpKeysetAccess = 48;
-            DaplugKeySet hotpKeyset = new DaplugKeySet(0xAC, DaplugKeySet.KeyUsage.USAGE_HOTP, hotpKeysetAccess, "3fad384539a266c6b2dbc64619a876c8");
+            DaplugKeySet hotpKeyset = new DaplugKeySet(0x33, DaplugKeySet.KeyUsage.USAGE_HOTP, hotpKeysetAccess, "3fad384539a266c6b2dbc64619a876c8");
             DaplugHMACOptions options = DaplugHMACOptions.HOTP6Digits;
             ushort counterFileId = 0xc01d;
 
@@ -259,8 +260,43 @@ namespace daplug.net.test
             WriteInfo("Deleting HOTP key with ID 0x{0:X2}...", hotpKeyset.Version);
             await api.DeleteKeyAsync(hotpKeyset.Version);
             api.CloseSecureChannel();
+        }
 
+        public static async Task TestTOTP(DaplugAPI api)
+        {
+            WriteTitle();
 
+            //Time source keyset, access first byte codes the key access (here : 0 = always), access second byte is not meaningful here
+            DaplugKeySet totpTimeSrcKeyset = new DaplugKeySet(0x34, DaplugKeySet.KeyUsage.USAGE_TOTP_TIME_SRC, 0x00, "cad048df2b00b9f3031d1b193bb5f0bd");
+
+            //TOTP keyset, access first byte codes the time source keyset version, access second byte codes the key length (must be < 48)
+            ushort totpKeysetAccess = (ushort)((totpTimeSrcKeyset.Version << 8) + 48);
+            DaplugKeySet totpKeyset = new DaplugKeySet(0x35, DaplugKeySet.KeyUsage.USAGE_TOTP, totpKeysetAccess, "b14007d5607f554fbf6377b87855ce90");
+
+            DaplugHMACOptions options = DaplugHMACOptions.HOTP6Digits;
+
+            WriteInfo("Opening Secure Channel...");
+            await api.OpenSecureChannelAsync(defaultKeyset, fullSecurityLevel);
+            WriteInfo("Setting up... Putting Time Reference key with ID 0x{0:X2}...", totpTimeSrcKeyset.Version);
+            await api.PutKeyAsync(totpTimeSrcKeyset);
+            WriteInfo("Setting up... Putting TOTP key with ID 0x{0:X2}...", totpKeyset.Version);
+            await api.PutKeyAsync(totpKeyset);
+
+            WriteInfo("Setting time reference...");
+            await api.SetTimeReferenceAsync(totpTimeSrcKeyset.Version, DaplugKeyType.EncryptionKey, totpTimeSrcKeyset.EncKey);
+
+            WriteInfo("Generating TOTP...");
+            byte[] hotpResult = await api.TOTPAsync(totpKeyset.Version, options);
+
+            string hotpString = Encoding.UTF8.GetString(hotpResult);
+            WriteSuccess("Generated TOTP: {0}", hotpString);
+
+            WriteInfo("Cleaning up...");
+            WriteInfo("Deleting Time Reference key with ID 0x{0:X2}...", totpTimeSrcKeyset.Version);
+            await api.DeleteKeyAsync(totpTimeSrcKeyset.Version);
+            WriteInfo("Deleting TOTP key with ID 0x{0:X2}...", totpKeyset.Version);
+            await api.DeleteKeyAsync(totpKeyset.Version);
+            api.CloseSecureChannel();
         }
 
         private static void WriteSuccess(string message)

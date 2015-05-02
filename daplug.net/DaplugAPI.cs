@@ -608,7 +608,7 @@ namespace daplug.net
             var response = await ExchangeAPDUAsync(putKeyCommand);
 
             if (!response.IsSuccessfulResponse)
-                throw new DaplugAPIException("Error: " + response.SW1 + response.SW2);
+                throw new DaplugAPIException("An error during the Put Key operation.", response.SW1, response.SW2);
         }
 
         public async Task DeleteKeyAsync(byte keyVersion)
@@ -755,7 +755,7 @@ namespace daplug.net
                 apduDataLenght += 16;
             }
 
-            if (data.Length + apduDataLenght > MAX_IO_DATA_SIZE)
+            if ((data != null) && (data.Length + apduDataLenght > MAX_IO_DATA_SIZE))
                 throw new ArgumentException("Data length limit exceeded.", "data");
 
             var hmacCommandAPDUBytes = new List<byte> { 0xD0, 0x22, keyVersion, (byte)options, 0x00 };
@@ -766,7 +766,8 @@ namespace daplug.net
             if (options.HasFlag(DaplugHMACOptions.TwoDiversifiers))
                 hmacCommandAPDUBytes.AddRange(diversifier2);
 
-            hmacCommandAPDUBytes.AddRange(data);
+            if (data != null)
+                hmacCommandAPDUBytes.AddRange(data);
 
             var hmacCommand = new APDUCommand(hmacCommandAPDUBytes);
 
@@ -777,7 +778,7 @@ namespace daplug.net
 
             return response.ResponseData;
         }
-        
+
         public async Task<byte[]> HMACSHA1Async(byte keyVersion, DaplugHMACOptions options, byte[] data, byte[] diversifier1 = null, byte[] diversifier2 = null)
         {
             if (options.HasFlag(DaplugHMACOptions.HOTP6Digits) || options.HasFlag(DaplugHMACOptions.HOTP7Digits) || options.HasFlag(DaplugHMACOptions.HOTP8Digits))
@@ -791,7 +792,7 @@ namespace daplug.net
             if (options.HasFlag(DaplugHMACOptions.HOTP6Digits) == false && options.HasFlag(DaplugHMACOptions.HOTP7Digits) == false && options.HasFlag(DaplugHMACOptions.HOTP8Digits) == false)
                 throw new ArgumentException("Invalid options for the HOTP function. Options must have an HOTP*Digits option flag.", "options");
 
-            //data must be the counter file ID when using and HOTP key or the counter data when using an HOTP_VALIDATION key
+            //data must be the counter file ID when using an HOTP key or the counter data when using an HOTP_VALIDATION key
             if (data.Length != 2 && data.Length != 8)
                 throw new ArgumentException("Invalid data length for the HOTP function. Data length must be 2 or 8 bytes long.", "data");
 
@@ -802,6 +803,55 @@ namespace daplug.net
         public async Task<byte[]> HOTPAsync(byte keyVersion, DaplugHMACOptions options, ushort counterFileId, byte[] diversifier1 = null, byte[] diversifier2 = null)
         {
             return await HOTPAsync(keyVersion, options, Helpers.UShortToByteArray(counterFileId), diversifier1, diversifier2);
+        }
+
+        public async Task<byte[]> TOTPAsync(byte keyVersion, DaplugHMACOptions options, byte[] data = null, byte[] diversifier1 = null, byte[] diversifier2 = null)
+        {
+            if (options.HasFlag(DaplugHMACOptions.HOTP6Digits) == false && options.HasFlag(DaplugHMACOptions.HOTP7Digits) == false && options.HasFlag(DaplugHMACOptions.HOTP8Digits) == false)
+                throw new ArgumentException("Invalid options for the HOTP function. Options must have an HOTP*Digits option flag.", "options");
+
+            //data must be null when using an TOTP key or the 8 byte time data when using an TOTP_VALIDATION key
+            if (data != null && data.Length != 8)
+                throw new ArgumentException("Invalid data for the HOTP function. Data must be empty or 8 bytes long.", "data");
+
+            return await HMACInternalAsync(keyVersion, options, data, diversifier1, diversifier2);
+        }
+
+        public async Task SetTimeReferenceAsync(byte keyVersion, DaplugKeyType keyType, byte[] timeSourceKey, int timeReference = 0, byte timeStep = 30)
+        {
+            if (timeReference == 0)
+                timeReference = (int)((DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds);
+
+            var setTimeCommandAPDUBytes = new List<byte> { 0xD0, 0xB2, keyVersion, (byte)keyType, 0x00 }; //header
+
+            byte[] nonce = Crypto.GetRandomBytes(11);
+            byte[] timeReferenceBytes = Helpers.IntToByteArray(timeReference);
+
+            List<byte> sigData = new List<byte>();
+
+            sigData.AddRange(nonce);
+            sigData.Add(timeStep);
+            sigData.AddRange(timeReferenceBytes);
+
+            byte[] tripleDesOutput = Crypto.TripleDESEncrypt(timeSourceKey, sigData.ToArray());
+
+            //the last 8 bytes from the Ciphertext are the signature
+            byte[] signature = new byte[8];
+            Array.Copy(tripleDesOutput, 8, signature, 0, 8);
+
+            //Append all this stuff to the APDU
+            setTimeCommandAPDUBytes.AddRange(nonce);
+            setTimeCommandAPDUBytes.Add(timeStep);
+            setTimeCommandAPDUBytes.AddRange(timeReferenceBytes);
+            setTimeCommandAPDUBytes.AddRange(signature);
+
+            var setTimeCommand = new APDUCommand(setTimeCommandAPDUBytes);
+
+            var response = await ExchangeAPDUAsync(setTimeCommand);
+
+            if (!response.IsSuccessfulResponse)
+                throw new DaplugAPIException("An error ocurred while setting the time reference.", response.SW1, response.SW2);
+
         }
 
         public void Dispose()

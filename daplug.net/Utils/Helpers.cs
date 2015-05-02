@@ -23,5 +23,16 @@ namespace daplug.net.Utils
 
             return result;
         }
+
+        internal static byte[] IntToByteArray(int input)
+        {
+            var result = BitConverter.GetBytes(input);
+            // If this is little endian machine, reverse the array
+            // so that the bytes are in the correct order
+            if (BitConverter.IsLittleEndian)
+                Array.Reverse(result);
+
+            return result;
+        }
     }
 }

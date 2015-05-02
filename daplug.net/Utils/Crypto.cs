@@ -7,6 +7,7 @@ namespace daplug.net.Utils
 {
     internal class Crypto
     {
+        private static RNGCryptoServiceProvider rngCsp = new RNGCryptoServiceProvider();
 
         private static readonly byte[] defaultIV = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
@@ -110,6 +111,13 @@ namespace daplug.net.Utils
             byte[] finalKCV = new byte[3];
             Array.Copy(kcvBuffer, finalKCV, 3);
             return finalKCV;
+        }
+
+        internal static byte[] GetRandomBytes(int count)
+        {
+            byte[] result = new byte[count];
+            rngCsp.GetBytes(result);
+            return result;
         }
     }
 }
