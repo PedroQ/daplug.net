@@ -10,17 +10,48 @@ namespace daplug.net.test
 {
     class Program
     {
-        private static DaplugKeySet defaultKeyset = new DaplugKeySet(0x01, "404142434445464748494A4B4C4D4E4F");
-        private static DaplugKeySet testKeyset = new DaplugKeySet(0x65, DaplugKeySet.KeyUsage.USAGE_GP, 0x0001, "404142434445464748494A4B4C4D4E4F");
+
+        //adminKeyset (0x01) already exists on the card. It acts as a specific administrative code with extended capabilities for dongle management.
+        private static DaplugKeySet adminKeyset = new DaplugKeySet(0x01, "404142434445464748494A4B4C4D4E4F");
+
         private static DaplugSecurityLevel fullSecurityLevel = DaplugSecurityLevel.COMMAND_MAC | DaplugSecurityLevel.COMMAND_ENC | DaplugSecurityLevel.RESPONSE_DEC | DaplugSecurityLevel.RESPONSE_MAC;
         private static DaplugSecurityLevel cMacSecurityLevel = DaplugSecurityLevel.COMMAND_MAC;
 
+        //testKeyset, used just for testing new keyset upload
+        private static DaplugKeySet testKeyset = new DaplugKeySet(0x65, DaplugKeySet.KeyUsage.GP, 0x0001, "6e7bf326a7c8103fe7c3d169a644c15e");
+
+        //Encryption/decryption keyset, access first byte codes the key access (here : 0 = always), access second byte codes the decryption access (here 0 = always)
+        private static DaplugKeySet cryptoKeyset = new DaplugKeySet(0x31, DaplugKeySet.KeyUsage.ENC_DEC, 0x0000, "61d1ff8efe6a482ac81414bbdd69a42d");
+
+        //HMAC-SHA1 keyset, access first byte codes the key access (here : 0 = always), access second byte codes the key length (must be < 48)
+        private static ushort hmacKeysetAccess = 48;
+        private static DaplugKeySet hmacKeyset = new DaplugKeySet(0x32, DaplugKeySet.KeyUsage.HMAC_SHA1, hmacKeysetAccess, "3fad384539a266c6b2dbc64619a876c8");
+
+        //HOTP keyset, access first byte codes the key access (here : 0 = always), access second byte codes the key length (must be < 48)
+        private static ushort hotpKeysetAccess = (0x00 << 8) + 48;
+        private static DaplugKeySet hotpKeyset = new DaplugKeySet(0x33, DaplugKeySet.KeyUsage.HOTP, hotpKeysetAccess, "763309febc67fec19aad0b1b8e858b1d");
+
+        //Time source keyset, access first byte codes the key access (here : 0 = always), access second byte is not meaningful here
+        private static DaplugKeySet totpTimeSrcKeyset = new DaplugKeySet(0x34, DaplugKeySet.KeyUsage.TOTP_TIME_SRC, 0x00, "cad048df2b00b9f3031d1b193bb5f0bd");
+
+        //TOTP keyset, access first byte codes the time source keyset version, access second byte codes the key length (must be < 48)
+        private static ushort totpKeysetAccess = (ushort)((totpTimeSrcKeyset.Version << 8) + 48);
+        private static DaplugKeySet totpKeyset = new DaplugKeySet(0x35, DaplugKeySet.KeyUsage.TOTP, totpKeysetAccess, "b14007d5607f554fbf6377b87855ce90");
+
+        //The transientKeyset (0xF0) is a virtual keyset located in RAM.. wich can be exported & imported.
+    	//When exported, the keyset is encrypted with a transient export keyset (role 0x0F)
+    	//In our test we use the ENC key of the existing transient export keyset (0xFD)
+    	
+    	//access first byte codes the key access (here : 0 = always), access second byte codes the minimum security level mask required to open a Secure Channel using this keyset
+        private static DaplugKeySet transientKeyset = new DaplugKeySet(0xF0, DaplugKeySet.KeyUsage.GP, 0x0001, "b6914fac3f25e74615d6723f5f7c8332");
+        private static DaplugKeySet transientKeyset2 = new DaplugKeySet(0xF0, DaplugKeySet.KeyUsage.GP, 0x0001, "760aeeedd51ade037186045fd9cfab97");
+
         static void Main(string[] args)
         {
-            var tests = RunTests();
+            Task tests = RunTests();
             tests.Wait();
-            Console.Write("Press <ENTER> to quit...");
-            Console.ReadLine();
+            Console.Write("Press any key to quit...");
+            Console.ReadKey();
         }
 
         private static async Task RunTests()
@@ -29,11 +60,12 @@ namespace daplug.net.test
             {
                 using (DaplugAPI api = DaplugAPI.OpenFirstDongle())
                 {
-                    await TestSecureChannel(api, defaultKeyset, cMacSecurityLevel);
+                    await TestSecureChannel(api, adminKeyset, fullSecurityLevel);
                     await TestGetSerial(api);
                     await TestGetStatus(api);
                     await TestGetLicensedOptions(api);
                     await TestPutKey(api);
+                    await TestTransientKeyset(api);
                     await TestFilesystem(api);
                     await TestGenerateRandom(api);
                     await TestCryptoOperations(api);
@@ -59,38 +91,74 @@ namespace daplug.net.test
         private static async Task TestGetSerial(DaplugAPI api)
         {
             WriteTitle();
-            var res = await api.GetSerialAsync();
+            byte[] res = await api.GetSerialAsync();
             WriteSuccess("Result: {0}", BitConverter.ToString(res).Replace("-", "").ToLowerInvariant());
         }
 
         private static async Task TestGetStatus(DaplugAPI api)
         {
             WriteTitle();
-            var res = await api.GetStatusAsync();
+            DaplugStatus res = await api.GetStatusAsync();
             WriteSuccess("Result: {0}", res);
         }
 
         private static async Task TestGetLicensedOptions(DaplugAPI api)
         {
             WriteTitle();
-            var licFileContents = await api.GetLicensedOptionsAsync();
+            DaplugLicensing licFileContents = await api.GetLicensedOptionsAsync();
             WriteSuccess("License File: {0}", licFileContents);
         }
 
         private static async Task TestPutKey(DaplugAPI api)
         {
             WriteTitle();
-            await api.OpenSecureChannelAsync(defaultKeyset, cMacSecurityLevel);
-            WriteInfo("Putting key 0x65...");
+            await api.OpenSecureChannelAsync(adminKeyset, cMacSecurityLevel);
+            WriteInfo("Putting key 0x{0:X2}...", testKeyset.Version);
             await api.PutKeyAsync(testKeyset);
             api.CloseSecureChannel();
-            WriteInfo("Opening Secure Channel with key 0x{0:X2}...", testKeyset.Version);
+            WriteInfo("Opening Secure Channel with key ...", testKeyset.Version);
             await api.OpenSecureChannelAsync(testKeyset, cMacSecurityLevel);
             WriteSuccess("Success!");
             api.CloseSecureChannel();
             WriteInfo("Deleting key 0x{0:X2}...", testKeyset.Version);
-            await api.OpenSecureChannelAsync(defaultKeyset, cMacSecurityLevel);
+            await api.OpenSecureChannelAsync(adminKeyset, cMacSecurityLevel);
             await api.DeleteKeyAsync(testKeyset.Version);
+            api.CloseSecureChannel();
+        }
+
+        private static async Task TestTransientKeyset(DaplugAPI api)
+        {
+            WriteTitle();
+            await api.OpenSecureChannelAsync(adminKeyset, cMacSecurityLevel);
+
+            WriteInfo("Putting first transient key 0x{0:X2}...", transientKeyset.Version);
+            await api.PutKeyAsync(transientKeyset);
+
+            WriteInfo("Exporting first transient keyset...");
+            byte[] keysetBlob = await api.ExportTransientKeyAsync(0xFD, DaplugKeyType.EncryptionKey);
+            api.CloseSecureChannel();
+
+            WriteInfo("Testing first transient keyset...");
+            await api.OpenSecureChannelAsync(transientKeyset, cMacSecurityLevel);
+            WriteSuccess("Success!");
+            api.CloseSecureChannel();
+
+            WriteInfo("Putting second transient key 0x{0:X2}...", transientKeyset2.Version);
+            await api.OpenSecureChannelAsync(adminKeyset, cMacSecurityLevel);
+            await api.PutKeyAsync(transientKeyset2);
+            api.CloseSecureChannel();
+
+            WriteInfo("Testing second transient keyset...");
+            await api.OpenSecureChannelAsync(transientKeyset2, cMacSecurityLevel);
+            WriteSuccess("Success!");
+            api.CloseSecureChannel();
+
+            WriteInfo("Importing first keyset from exported blob...");
+            await api.ImportTransientKeyAsync(0xFD, DaplugKeyType.EncryptionKey, keysetBlob);
+
+            WriteInfo("Testing imported keyset...");
+            await api.OpenSecureChannelAsync(transientKeyset, cMacSecurityLevel);
+            WriteSuccess("Success!");
             api.CloseSecureChannel();
         }
 
@@ -105,13 +173,13 @@ namespace daplug.net.test
 
             WriteTitle();
             WriteInfo("Opening Secure Channel...");
-            await api.OpenSecureChannelAsync(defaultKeyset, fullSecurityLevel);
+            await api.OpenSecureChannelAsync(adminKeyset, cMacSecurityLevel);
             WriteInfo("Selecting Master File...");
             await api.SelectPathAsync(DaplugConstants.MasterFileId);
             WriteInfo("Creating DF 0x{0:X2}...", dirId);
             await api.CreateDirectoryAsync(dirId, DaplugConstants.AccessAlways);
             WriteInfo("Selecting DF 0x{0:X2}...", dirId);
-            var result = await api.SelectPathAsync(dirId);
+            await api.SelectPathAsync(dirId);
             WriteInfo("Creating File 0x{0:X2}...", fileId);
             await api.CreateFileAsync(fileId, testDataLength, DaplugConstants.AccessAlways);
             WriteInfo("Selecting File 0x{0:X2}...", fileId);
@@ -119,7 +187,7 @@ namespace daplug.net.test
             WriteInfo("Writing test data to file...");
             await api.WriteFileDataAsync(0, testBytes);
             WriteInfo("Reading test data to file...");
-            var fileContents = await api.ReadFileDataAsync(0, testDataLength);
+            byte[] fileContents = await api.ReadFileDataAsync(0, testDataLength);
             bool readTestSuccess = testBytes.SequenceEqual(fileContents);
             if (readTestSuccess)
                 WriteSuccess("Success! Read data matches Test data.");
@@ -145,8 +213,8 @@ namespace daplug.net.test
 
             WriteTitle();
             WriteInfo("Opening Secure Channel...");
-            await api.OpenSecureChannelAsync(defaultKeyset, fullSecurityLevel);
-            var randomBytes = await api.GenerateRandomAsync(numBytes);
+            await api.OpenSecureChannelAsync(adminKeyset, cMacSecurityLevel);
+            byte[] randomBytes = await api.GenerateRandomAsync(numBytes);
             WriteSuccess("Success! Got {0} random bytes.", numBytes);
             api.CloseSecureChannel();
 
@@ -155,9 +223,6 @@ namespace daplug.net.test
         public static async Task TestCryptoOperations(DaplugAPI api)
         {
             WriteTitle();
-            //Encryption/decryption keyset, access first byte codes the key access (here : 0 = always), access second byte codes the decryption access (here 0 = always)
-            DaplugKeySet cryptoKeyset = new DaplugKeySet(0x31, DaplugKeySet.KeyUsage.USAGE_ENC_DEC, 0x0000, "404142434445464748494A4B4C4D4E4F");
-            DaplugCryptoOptions options = DaplugCryptoOptions.ModeCBC | DaplugCryptoOptions.TwoDiversifiers;
 
             Random rnd = new Random();
 
@@ -172,9 +237,11 @@ namespace daplug.net.test
             rnd.NextBytes(div2);
 
             WriteInfo("Opening Secure Channel...");
-            await api.OpenSecureChannelAsync(defaultKeyset, fullSecurityLevel);
+            await api.OpenSecureChannelAsync(adminKeyset, cMacSecurityLevel);
             WriteInfo("Setting up... Putting key with ID 0x{0:X2}...", cryptoKeyset.Version);
             await api.PutKeyAsync(cryptoKeyset);
+
+            DaplugCryptoOptions options = DaplugCryptoOptions.ModeCBC | DaplugCryptoOptions.TwoDiversifiers;
 
             byte[] cipherText = await api.EncryptDataAsync(cryptoKeyset.Version, DaplugKeyType.EncryptionKey, options, testData, iv, div1, div2);
             WriteSuccess("Got ciphertext.");
@@ -196,17 +263,12 @@ namespace daplug.net.test
         {
             WriteTitle();
 
-            //HMAC-SHA1 keyset, access first byte codes the key access (here : 0 = always), access second byte codes the key length (must be < 48)
-            ushort hmacKeysetAccess = 48;
-            DaplugKeySet hmacKeyset = new DaplugKeySet(0x32, DaplugKeySet.KeyUsage.USAGE_HMAC_SHA1, hmacKeysetAccess, "3fad384539a266c6b2dbc64619a876c8");
-            DaplugHMACOptions options = DaplugHMACOptions.NoDiversifier;
-
             //calculate HMACSHA1 locally
-            var localHMACKey = StringToByteArray("3fad384539a266c6b2dbc64619a876c83fad384539a266c6b2dbc64619a876c83fad384539a266c6b2dbc64619a876c8");
+            byte[] localHMACKey = StringToByteArray("3fad384539a266c6b2dbc64619a876c83fad384539a266c6b2dbc64619a876c83fad384539a266c6b2dbc64619a876c8");
             HMACSHA1 hmacSha1 = new HMACSHA1(localHMACKey);
 
             WriteInfo("Opening Secure Channel...");
-            await api.OpenSecureChannelAsync(defaultKeyset, fullSecurityLevel);
+            await api.OpenSecureChannelAsync(adminKeyset, cMacSecurityLevel);
             WriteInfo("Setting up... Putting HMAC-SHA1 key with ID 0x{0:X2}...", hmacKeyset.Version);
             await api.PutKeyAsync(hmacKeyset);
 
@@ -214,6 +276,7 @@ namespace daplug.net.test
             byte[] expectedSignature = hmacSha1.ComputeHash(data);
 
             WriteInfo("Calling HMAC-SHA1...");
+            DaplugHMACOptions options = DaplugHMACOptions.NoDiversifier;
             byte[] signature = await api.HMACSHA1Async(hmacKeyset.Version, options, data);
 
             bool testDataMatches = signature.SequenceEqual(expectedSignature);
@@ -231,14 +294,10 @@ namespace daplug.net.test
         {
             WriteTitle();
 
-            //HOTP keyset, access first byte codes the key access (here : 0 = always), access second byte codes the key length (must be < 48)
-            ushort hotpKeysetAccess = 48;
-            DaplugKeySet hotpKeyset = new DaplugKeySet(0x33, DaplugKeySet.KeyUsage.USAGE_HOTP, hotpKeysetAccess, "3fad384539a266c6b2dbc64619a876c8");
-            DaplugHMACOptions options = DaplugHMACOptions.HOTP6Digits;
             ushort counterFileId = 0xc01d;
 
             WriteInfo("Opening Secure Channel...");
-            await api.OpenSecureChannelAsync(defaultKeyset, fullSecurityLevel);
+            await api.OpenSecureChannelAsync(adminKeyset, cMacSecurityLevel);
             WriteInfo("Setting up... Putting HOTP key with ID 0x{0:X2}...", hotpKeyset.Version);
             await api.PutKeyAsync(hotpKeyset);
             WriteInfo("Creating counter file...");
@@ -246,6 +305,7 @@ namespace daplug.net.test
             await api.CreateFileAsync(0xc01d, 8, DaplugConstants.AccessAlways, isCounterFile: true);
 
             WriteInfo("Generating HOTP...");
+            DaplugHMACOptions options = DaplugHMACOptions.HOTP6Digits;
             byte[] hotpResult = await api.HOTPAsync(hotpKeyset.Version, options, counterFileId);
 
             string hotpString = Encoding.UTF8.GetString(hotpResult);
@@ -266,17 +326,8 @@ namespace daplug.net.test
         {
             WriteTitle();
 
-            //Time source keyset, access first byte codes the key access (here : 0 = always), access second byte is not meaningful here
-            DaplugKeySet totpTimeSrcKeyset = new DaplugKeySet(0x34, DaplugKeySet.KeyUsage.USAGE_TOTP_TIME_SRC, 0x00, "cad048df2b00b9f3031d1b193bb5f0bd");
-
-            //TOTP keyset, access first byte codes the time source keyset version, access second byte codes the key length (must be < 48)
-            ushort totpKeysetAccess = (ushort)((totpTimeSrcKeyset.Version << 8) + 48);
-            DaplugKeySet totpKeyset = new DaplugKeySet(0x35, DaplugKeySet.KeyUsage.USAGE_TOTP, totpKeysetAccess, "b14007d5607f554fbf6377b87855ce90");
-
-            DaplugHMACOptions options = DaplugHMACOptions.HOTP6Digits;
-
             WriteInfo("Opening Secure Channel...");
-            await api.OpenSecureChannelAsync(defaultKeyset, fullSecurityLevel);
+            await api.OpenSecureChannelAsync(adminKeyset, cMacSecurityLevel);
             WriteInfo("Setting up... Putting Time Reference key with ID 0x{0:X2}...", totpTimeSrcKeyset.Version);
             await api.PutKeyAsync(totpTimeSrcKeyset);
             WriteInfo("Setting up... Putting TOTP key with ID 0x{0:X2}...", totpKeyset.Version);
@@ -285,7 +336,11 @@ namespace daplug.net.test
             WriteInfo("Setting time reference...");
             await api.SetTimeReferenceAsync(totpTimeSrcKeyset.Version, DaplugKeyType.EncryptionKey, totpTimeSrcKeyset.EncKey);
 
+            DateTime dongleTime = await api.GetTimeReferenceAsync();
+            WriteInfo("Time is: {0}", dongleTime);
+
             WriteInfo("Generating TOTP...");
+            DaplugHMACOptions options = DaplugHMACOptions.HOTP6Digits;
             byte[] hotpResult = await api.TOTPAsync(totpKeyset.Version, options);
 
             string hotpString = Encoding.UTF8.GetString(hotpResult);

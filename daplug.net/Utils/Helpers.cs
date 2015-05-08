@@ -24,7 +24,7 @@ namespace daplug.net.Utils
             return result;
         }
 
-        internal static byte[] IntToByteArray(int input)
+        internal static byte[] UIntToByteArray(uint input)
         {
             var result = BitConverter.GetBytes(input);
             // If this is little endian machine, reverse the array
@@ -33,6 +33,25 @@ namespace daplug.net.Utils
                 Array.Reverse(result);
 
             return result;
+        }
+
+        internal static uint ByteArrayToUInt(byte[] input)
+        {
+            if (BitConverter.IsLittleEndian)
+                Array.Reverse(input);
+
+            return  BitConverter.ToUInt32(input, 0);
+        }
+
+        internal static DateTime UnixTimeToLocalDateTime(uint input)
+        {
+            DateTime epoch = new DateTime(1970, 1, 1, 0, 0, 0, 0, System.DateTimeKind.Utc);
+            return  epoch.AddSeconds(input).ToLocalTime();
+        }
+
+        internal static uint GetUnixTime()
+        {
+            return (uint)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds;
         }
     }
 }

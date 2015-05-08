@@ -620,6 +620,32 @@ namespace daplug.net
             await DeleteFileOrDirAsync(keyFileID);
         }
 
+        public async Task<byte[]> ExportTransientKeyAsync(byte exportKeysetVersion, DaplugKeyType exportKeyType)
+        {
+            var exportTransientKeysetCommandAPDUBytes = new byte[] { 0xD0, 0xA0, exportKeysetVersion, (byte)exportKeyType, 0x00 };
+
+            var exportTransientKeysetCommand = new APDUCommand(exportTransientKeysetCommandAPDUBytes);
+
+            var response = await ExchangeAPDUAsync(exportTransientKeysetCommand);
+
+            if (!response.IsSuccessfulResponse)
+                throw new DaplugAPIException("An error ocurred while exporting the transient key.", response.SW1, response.SW2);
+
+            return response.ResponseData;
+        }
+
+        public async Task ImportTransientKeyAsync(byte exportKeysetVersion, DaplugKeyType exportKeyType, byte[] keysetBlob)
+        {
+            var importTransientKeysetCommandAPDUBytes = new byte[] { 0xD0, 0xA2, exportKeysetVersion, (byte)exportKeyType, 0x00 };
+
+            var importTransientKeysetCommand = new APDUCommand(importTransientKeysetCommandAPDUBytes, keysetBlob);
+
+            var response = await ExchangeAPDUAsync(importTransientKeysetCommand);
+
+            if (!response.IsSuccessfulResponse)
+                throw new DaplugAPIException("An error ocurred while importing the transient key.", response.SW1, response.SW2);
+        }
+
         public async Task<byte[]> GenerateRandomAsync(byte length)
         {
             if (length > MAX_IO_DATA_SIZE)
@@ -817,15 +843,15 @@ namespace daplug.net
             return await HMACInternalAsync(keyVersion, options, data, diversifier1, diversifier2);
         }
 
-        public async Task SetTimeReferenceAsync(byte keyVersion, DaplugKeyType keyType, byte[] timeSourceKey, int timeReference = 0, byte timeStep = 30)
+        public async Task SetTimeReferenceAsync(byte keyVersion, DaplugKeyType keyType, byte[] timeSourceKey, uint timeReference = 0, byte timeStep = 30)
         {
             if (timeReference == 0)
-                timeReference = (int)((DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds);
+                timeReference = Helpers.GetUnixTime();
 
             var setTimeCommandAPDUBytes = new List<byte> { 0xD0, 0xB2, keyVersion, (byte)keyType, 0x00 }; //header
 
             byte[] nonce = Crypto.GetRandomBytes(11);
-            byte[] timeReferenceBytes = Helpers.IntToByteArray(timeReference);
+            byte[] timeReferenceBytes = Helpers.UIntToByteArray(timeReference);
 
             List<byte> sigData = new List<byte>();
 
@@ -851,6 +877,28 @@ namespace daplug.net
 
             if (!response.IsSuccessfulResponse)
                 throw new DaplugAPIException("An error ocurred while setting the time reference.", response.SW1, response.SW2);
+        }
+
+        public async Task<DateTime> GetTimeReferenceAsync()
+        {
+            var getTimeCommandAPDUBytes = new byte[] { 0xD0, 0xB0, 0x00, 0x00, 0x00 };
+
+            var getTimeCommand = new APDUCommand(getTimeCommandAPDUBytes);
+
+            var response = await ExchangeAPDUAsync(getTimeCommand);
+
+            if (!response.IsSuccessfulResponse)
+                throw new DaplugAPIException("An error ocurred while retrieving the dongle time.", response.SW1, response.SW2);
+
+
+            byte keyId = response.ResponseData[0]; //Time source key id, or 00 if the SET TIME REFERENCE has not been called
+            byte[] timeRef = new byte[4];
+
+            Array.Copy(response.ResponseData, 1, timeRef, 0, 4); //Time value, encoded as a big endian unsigned 32 bits integer
+
+            uint timestamp = Helpers.ByteArrayToUInt(timeRef);
+
+            return Helpers.UnixTimeToLocalDateTime(timestamp);
 
         }
 
