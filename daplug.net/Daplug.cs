@@ -77,7 +77,7 @@ namespace daplug.net
         HOTP8Digits = 0x40
     }
 
-    public class DaplugAPI : IDisposable
+    public class Daplug : IDisposable
     {
         public static readonly ushort MAX_FS_FILE_SIZE = 0xffff; //Max size of an EF
         public static readonly byte MAX_IO_DATA_SIZE = 0xef; //EF = FF - 8 - 8 (data max len - possible mac - possible pad if data encrypted)
@@ -88,21 +88,14 @@ namespace daplug.net
         public DaplugLicensing LicensedOptions { get; private set; }
 
         public DaplugSessionKeys SessionKeys { get; private set; }
-
-        private DaplugAPI(IDaplugDongle device)
+        public DaplugCommMode CommunicationMode
         {
-            dongle = device;
+            get { return dongle.CommunicationMode; }
         }
 
-        public static DaplugAPI OpenFirstDongle()
+        internal Daplug(IDaplugDongle device)
         {
-            var firstDevice = new daplug.net.Dongle.DaplugEnumerator().OpenFirstDongle();
-
-            if (firstDevice != null)
-                return new DaplugAPI(firstDevice);
-
-            return null;
-
+            dongle = device;
         }
 
         private async Task ThrowIfLicenceOptionIsNotAvailable(DaplugLicensing option)

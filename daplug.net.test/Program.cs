@@ -4,6 +4,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace daplug.net.test
@@ -39,15 +40,22 @@ namespace daplug.net.test
         private static DaplugKeySet totpKeyset = new DaplugKeySet(0x35, DaplugKeySet.KeyUsage.TOTP, totpKeysetAccess, "b14007d5607f554fbf6377b87855ce90");
 
         //The transientKeyset (0xF0) is a virtual keyset located in RAM.. wich can be exported & imported.
-    	//When exported, the keyset is encrypted with a transient export keyset (role 0x0F)
-    	//In our test we use the ENC key of the existing transient export keyset (0xFD)
-    	
-    	//access first byte codes the key access (here : 0 = always), access second byte codes the minimum security level mask required to open a Secure Channel using this keyset
+        //When exported, the keyset is encrypted with a transient export keyset (role 0x0F)
+        //In our test we use the ENC key of the existing transient export keyset (0xFD)
+
+        //access first byte codes the key access (here : 0 = always), access second byte codes the minimum security level mask required to open a Secure Channel using this keyset
         private static DaplugKeySet transientKeyset = new DaplugKeySet(0xF0, DaplugKeySet.KeyUsage.GP, 0x0001, "b6914fac3f25e74615d6723f5f7c8332");
         private static DaplugKeySet transientKeyset2 = new DaplugKeySet(0xF0, DaplugKeySet.KeyUsage.GP, 0x0001, "760aeeedd51ade037186045fd9cfab97");
 
         static void Main(string[] args)
         {
+            var dList = DaplugEnumerator.ListAllDongles();
+
+            foreach (var dongle in dList)
+            {
+                Console.WriteLine("{0} ({1})", dongle.Item2, dongle.Item1);
+            }
+
             Task tests = RunTests();
             tests.Wait();
             Console.Write("Press any key to quit...");
@@ -58,20 +66,21 @@ namespace daplug.net.test
         {
             try
             {
-                using (DaplugAPI api = DaplugAPI.OpenFirstDongle())
+                using (Daplug daplug = DaplugEnumerator.OpenFirstDongle())
                 {
-                    await TestSecureChannel(api, adminKeyset, fullSecurityLevel);
-                    await TestGetSerial(api);
-                    await TestGetStatus(api);
-                    await TestGetLicensedOptions(api);
-                    await TestPutKey(api);
-                    await TestTransientKeyset(api);
-                    await TestFilesystem(api);
-                    await TestGenerateRandom(api);
-                    await TestCryptoOperations(api);
-                    await TestHMACSHA1(api);
-                    await TestHOTP(api);
-                    await TestTOTP(api);
+                    WriteInfo("Using Daplug in {0} mode.", daplug.CommunicationMode);
+                    await TestSecureChannel(daplug, adminKeyset, fullSecurityLevel);
+                    await TestGetSerial(daplug);
+                    await TestGetStatus(daplug);
+                    await TestGetLicensedOptions(daplug);
+                    await TestPutKey(daplug);
+                    await TestTransientKeyset(daplug);
+                    await TestFilesystem(daplug);
+                    await TestGenerateRandom(daplug);
+                    await TestCryptoOperations(daplug);
+                    await TestHMACSHA1(daplug);
+                    await TestHOTP(daplug);
+                    await TestTOTP(daplug);
                 }
             }
             catch (Exception e)
@@ -80,7 +89,7 @@ namespace daplug.net.test
             }
         }
 
-        private static async Task TestSecureChannel(DaplugAPI api, DaplugKeySet keyset, DaplugSecurityLevel secLevel)
+        private static async Task TestSecureChannel(Daplug api, DaplugKeySet keyset, DaplugSecurityLevel secLevel)
         {
             WriteTitle();
             await api.OpenSecureChannelAsync(keyset, secLevel);
@@ -88,28 +97,28 @@ namespace daplug.net.test
             api.CloseSecureChannel();
         }
 
-        private static async Task TestGetSerial(DaplugAPI api)
+        private static async Task TestGetSerial(Daplug api)
         {
             WriteTitle();
             byte[] res = await api.GetSerialAsync();
             WriteSuccess("Result: {0}", BitConverter.ToString(res).Replace("-", "").ToLowerInvariant());
         }
 
-        private static async Task TestGetStatus(DaplugAPI api)
+        private static async Task TestGetStatus(Daplug api)
         {
             WriteTitle();
             DaplugStatus res = await api.GetStatusAsync();
             WriteSuccess("Result: {0}", res);
         }
 
-        private static async Task TestGetLicensedOptions(DaplugAPI api)
+        private static async Task TestGetLicensedOptions(Daplug api)
         {
             WriteTitle();
             DaplugLicensing licFileContents = await api.GetLicensedOptionsAsync();
             WriteSuccess("License File: {0}", licFileContents);
         }
 
-        private static async Task TestPutKey(DaplugAPI api)
+        private static async Task TestPutKey(Daplug api)
         {
             WriteTitle();
             await api.OpenSecureChannelAsync(adminKeyset, cMacSecurityLevel);
@@ -126,7 +135,7 @@ namespace daplug.net.test
             api.CloseSecureChannel();
         }
 
-        private static async Task TestTransientKeyset(DaplugAPI api)
+        private static async Task TestTransientKeyset(Daplug api)
         {
             WriteTitle();
             await api.OpenSecureChannelAsync(adminKeyset, cMacSecurityLevel);
@@ -162,11 +171,11 @@ namespace daplug.net.test
             api.CloseSecureChannel();
         }
 
-        public static async Task TestFilesystem(DaplugAPI api)
+        public static async Task TestFilesystem(Daplug api)
         {
-            ushort dirId = 0x2012;
-            ushort fileId = 1001;
-            ushort testDataLength = 600;
+            ushort dirId = 0x2000;
+            ushort fileId = 0x2001;
+            ushort testDataLength = 512;
             byte[] testBytes = new byte[testDataLength];
             Random rnd = new Random();
             rnd.NextBytes(testBytes);
@@ -193,12 +202,14 @@ namespace daplug.net.test
                 WriteSuccess("Success! Read data matches Test data.");
             else
                 WriteFail("Fail! Read data does not match Test data.");
+
             WriteInfo("Selecting Master File...");
             await api.SelectPathAsync(DaplugConstants.MasterFileId);
             WriteInfo("Selecting DF 0x{0:X2}...", dirId);
             await api.SelectPathAsync(dirId);
             WriteInfo("Deleting File 0x{0:X2}...", fileId);
             await api.DeleteFileOrDirAsync(fileId);
+
             WriteInfo("Selecting Master File...");
             await api.SelectPathAsync(DaplugConstants.MasterFileId);
             WriteInfo("Deleting DF 0x{0:X2}...", dirId);
@@ -207,7 +218,7 @@ namespace daplug.net.test
             WriteSuccess("Success!");
         }
 
-        public static async Task TestGenerateRandom(DaplugAPI api)
+        public static async Task TestGenerateRandom(Daplug api)
         {
             byte numBytes = 128;
 
@@ -220,7 +231,7 @@ namespace daplug.net.test
 
         }
 
-        public static async Task TestCryptoOperations(DaplugAPI api)
+        public static async Task TestCryptoOperations(Daplug api)
         {
             WriteTitle();
 
@@ -259,7 +270,7 @@ namespace daplug.net.test
             api.CloseSecureChannel();
         }
 
-        public static async Task TestHMACSHA1(DaplugAPI api)
+        public static async Task TestHMACSHA1(Daplug api)
         {
             WriteTitle();
 
@@ -290,7 +301,7 @@ namespace daplug.net.test
             api.CloseSecureChannel();
         }
 
-        public static async Task TestHOTP(DaplugAPI api)
+        public static async Task TestHOTP(Daplug api)
         {
             WriteTitle();
 
@@ -322,7 +333,7 @@ namespace daplug.net.test
             api.CloseSecureChannel();
         }
 
-        public static async Task TestTOTP(DaplugAPI api)
+        public static async Task TestTOTP(Daplug api)
         {
             WriteTitle();
 

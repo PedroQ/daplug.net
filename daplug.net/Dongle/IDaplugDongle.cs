@@ -9,5 +9,6 @@ namespace daplug.net.Dongle
     {
         Task<APDUResponse> ExchangeAPDU(APDUCommand apdu);
         APDUResponse[] ExchangeAPDUs(ICollection<APDUCommand> apduCollection);
+        DaplugCommMode CommunicationMode { get; }
     }
 }
